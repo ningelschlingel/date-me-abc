@@ -1,0 +1,19 @@
+{
+  "name": "abc-dates",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:emu": "firebase emulators:exec --only firestore,auth --ui \"VITE_EMULATOR=1 vite\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vite build && firebase deploy"
+  },
+  "dependencies": {
+    "firebase": "^13.4.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.8"
+  }
+}

@@ -1,0 +1,191 @@
+rules_version = '2';
+
+// ABC Dates — security rules
+//
+// series/{sid}                 the shared game document
+// series/{sid}/private/keys    { p1: KEY, p2: KEY } personal device keys (members only)
+// series/{sid}/claims/{uid}    proof that a device knows a player's key
+//
+// Who can do what:
+//   - anyone signed in may READ a series that is still WAITING (to see who invited them)
+//   - only member devices (uid listed in players.pX.uids) may read/modify after that
+//   - the first non-member may JOIN a WAITING series as p2
+//   - a new device may CLAIM a role by proving it knows that player's personal key
+
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+
+    function isP1(d) { return me() in d.players.p1.uids; }
+    function isP2(d) { return d.players.p2 != null && me() in d.players.p2.uids; }
+    function isMember(d) { return isP1(d) || isP2(d); }
+
+    function validName(n) { return n is string && n.size() > 0 && n.size() <= 24; }
+
+    // Kept deliberately tiny: rules have a 1000-expression budget per request,
+    // and a reset touches all 26 letters at once.
+    function okLetter(x) {
+      return x.description is string && x.description.size() <= 80;
+    }
+
+    // Full check — only used on create (every letter is new).
+    function lettersValid(l) {
+      return l.keys().hasOnly(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'])
+        && l.size() == 26
+        && okLetter(l.A)
+        && okLetter(l.B)
+        && okLetter(l.C)
+        && okLetter(l.D)
+        && okLetter(l.E)
+        && okLetter(l.F)
+        && okLetter(l.G)
+        && okLetter(l.H)
+        && okLetter(l.I)
+        && okLetter(l.J)
+        && okLetter(l.K)
+        && okLetter(l.L)
+        && okLetter(l.M)
+        && okLetter(l.N)
+        && okLetter(l.O)
+        && okLetter(l.P)
+        && okLetter(l.Q)
+        && okLetter(l.R)
+        && okLetter(l.S)
+        && okLetter(l.T)
+        && okLetter(l.U)
+        && okLetter(l.V)
+        && okLetter(l.W)
+        && okLetter(l.X)
+        && okLetter(l.Y)
+        && okLetter(l.Z);
+    }
+
+    // Updates only re-validate the letters that actually changed, which keeps
+    // us well under the 1000-expression rule budget.
+    function lettersChangedValid(before, after) {
+      let ch = after.diff(before).affectedKeys();
+      return after.keys().hasOnly(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'])
+        && after.size() == 26
+        && (!('A' in ch) || okLetter(after.A))
+        && (!('B' in ch) || okLetter(after.B))
+        && (!('C' in ch) || okLetter(after.C))
+        && (!('D' in ch) || okLetter(after.D))
+        && (!('E' in ch) || okLetter(after.E))
+        && (!('F' in ch) || okLetter(after.F))
+        && (!('G' in ch) || okLetter(after.G))
+        && (!('H' in ch) || okLetter(after.H))
+        && (!('I' in ch) || okLetter(after.I))
+        && (!('J' in ch) || okLetter(after.J))
+        && (!('K' in ch) || okLetter(after.K))
+        && (!('L' in ch) || okLetter(after.L))
+        && (!('M' in ch) || okLetter(after.M))
+        && (!('N' in ch) || okLetter(after.N))
+        && (!('O' in ch) || okLetter(after.O))
+        && (!('P' in ch) || okLetter(after.P))
+        && (!('Q' in ch) || okLetter(after.Q))
+        && (!('R' in ch) || okLetter(after.R))
+        && (!('S' in ch) || okLetter(after.S))
+        && (!('T' in ch) || okLetter(after.T))
+        && (!('U' in ch) || okLetter(after.U))
+        && (!('V' in ch) || okLetter(after.V))
+        && (!('W' in ch) || okLetter(after.W))
+        && (!('X' in ch) || okLetter(after.X))
+        && (!('Y' in ch) || okLetter(after.Y))
+        && (!('Z' in ch) || okLetter(after.Z));
+    }
+
+    function seriesPath(sid) { return /databases/$(db)/documents/series/$(sid); }
+
+    match /series/{sid} {
+
+      allow read: if signedIn()
+        && (resource.data.status == 'WAITING' || isMember(resource.data));
+
+      allow create: if signedIn()
+        && request.resource.data.status == 'WAITING'
+        && request.resource.data.players.p1.uids == [me()]
+        && validName(request.resource.data.players.p1.name)
+        && request.resource.data.players.p2 == null
+        && lettersValid(request.resource.data.letters);
+
+      allow update: if signedIn() && (memberUpdate() || join() || claim('p1', 'p2') || claim('p2', 'p1'));
+
+      // Player 2 joins: only while waiting, only one seat, flips to ACTIVE.
+      function join() {
+        let before = resource.data;
+        let after = request.resource.data;
+        return before.status == 'WAITING'
+          && before.players.p2 == null
+          && !(me() in before.players.p1.uids)
+          && after.players.p1 == before.players.p1
+          && after.players.p2.uids == [me()]
+          && validName(after.players.p2.name)
+          && after.status == 'ACTIVE'
+          && after.createdAt == before.createdAt
+          && after.diff(before).affectedKeys().hasOnly(['players', 'status', 'letters', 'round', 'updatedAt'])
+          && lettersChangedValid(before.letters, after.letters);
+      }
+
+      // Normal gameplay by a member device. Device lists can't be touched here.
+      function memberUpdate() {
+        let before = resource.data;
+        let after = request.resource.data;
+        return isMember(before)
+          && after.players.p1.uids == before.players.p1.uids
+          && (before.players.p2 == null
+                ? after.players.p2 == null
+                : (after.players.p2 != null && after.players.p2.uids == before.players.p2.uids))
+          && validName(after.players.p1.name)
+          && (after.players.p2 == null || validName(after.players.p2.name))
+          && after.createdAt == before.createdAt
+          && after.status in ['WAITING', 'ACTIVE', 'COMPLETED']
+          && (after.players.p2 != null || after.status == 'WAITING')
+          && lettersChangedValid(before.letters, after.letters);
+      }
+
+      // A device adds itself to player p (optionally leaving player q),
+      // backed by a claim doc written in the same batch.
+      function claim(p, q) {
+        let before = resource.data.players;
+        let after = request.resource.data.players;
+        let mine = [me()].toSet();
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
+          && before[p] != null
+          && after[p].diff(before[p]).affectedKeys().hasOnly(['uids'])
+          && after[p].uids.toSet() == before[p].uids.toSet().union(mine)
+          && (after[q] == before[q]
+              || (after[q].diff(before[q]).affectedKeys().hasOnly(['uids'])
+                  && after[q].uids.toSet() == before[q].uids.toSet().difference(mine)))
+          && getAfter(/databases/$(db)/documents/series/$(sid)/claims/$(me())).data.player == p;
+      }
+
+      match /private/{doc} {
+        allow read: if signedIn() && isMember(get(seriesPath(sid)).data);
+
+        // p1 stores their key while creating the series (same batch).
+        allow create: if signedIn() && doc == 'keys'
+          && me() in getAfter(seriesPath(sid)).data.players.p1.uids
+          && request.resource.data.keys().hasOnly(['p1'])
+          && request.resource.data.p1 is string && request.resource.data.p1.size() == 5;
+
+        // p2 adds their key while joining (same transaction).
+        allow update: if signedIn() && doc == 'keys'
+          && !('p2' in resource.data)
+          && request.resource.data.p1 == resource.data.p1
+          && request.resource.data.keys().hasOnly(['p1', 'p2'])
+          && request.resource.data.p2 is string && request.resource.data.p2.size() == 5
+          && getAfter(seriesPath(sid)).data.players.p2 != null
+          && me() in getAfter(seriesPath(sid)).data.players.p2.uids;
+      }
+
+      match /claims/{uid} {
+        allow read: if signedIn() && me() == uid;
+        allow create, update: if signedIn() && me() == uid
+          && request.resource.data.player in ['p1', 'p2']
+          && request.resource.data.key == get(/databases/$(db)/documents/series/$(sid)/private/keys).data[request.resource.data.player];
+      }
+    }
+  }
+}
