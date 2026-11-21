@@ -1,20 +1,21 @@
 import { ALPHABET } from './game.js';
+import { locale, t } from './i18n.js';
 
 const dateOf = (x) => x.dateAt ?? x.completedAt;
 
 const fmtDate = (ms) =>
-  ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  ms ? new Date(ms).toLocaleDateString(locale(), { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
 export function exportText(data) {
   const { p1, p2 } = data.players;
   const lines = ALPHABET.map((l) => {
     const x = data.letters[l];
-    if (x.status === 'PREDONE') return `${l} — (done before we started)`;
+    if (x.status === 'PREDONE') return `${l} — ${t('exPre')}`;
     if (x.status !== 'DONE') return `${l} — …`;
     const who = data.players[x.assignedTo]?.name;
     return `${l} — ${x.description}  (${who}, ${fmtDate(dateOf(x))})`;
   });
-  return [`ABC Dates · ${p1.name} & ${p2?.name ?? ''}`, '', ...lines, '', 'A to Z, together. ♡'].join('\n');
+  return [`ABC Dates · ${p1.name} & ${p2?.name ?? ''}`, '', ...lines, '', t('exFooter')].join('\n');
 }
 
 export async function copyText(text) {
@@ -85,7 +86,7 @@ export async function renderRecapPNG(data) {
     const x = data.letters[l];
     const done = x.status === 'DONE';
     const pre = x.status === 'PREDONE';
-    const lines = done ? wrap(measure, x.description || '—', TEXT_W, 2) : [pre ? 'Done before we started' : '—'];
+    const lines = done ? wrap(measure, x.description || '—', TEXT_W, 2) : [pre ? t('pngPre') : '—'];
     return { l, x, done, pre, lines, h: 34 + lines.length * 38 + 30 };
   });
   const HEADER = 300;
@@ -116,7 +117,7 @@ export async function renderRecapPNG(data) {
   const first = Math.min(...rows.filter((r) => r.done).map((r) => dateOf(r.x)));
   const last = Math.max(...rows.filter((r) => r.done).map((r) => dateOf(r.x)));
   ctx.fillText(
-    Number.isFinite(first) ? `${fmtDate(first)} – ${fmtDate(last)}` : 'from A to Z',
+    Number.isFinite(first) ? `${fmtDate(first)} – ${fmtDate(last)}` : t('pngFromAtoZ'),
     W / 2,
     242,
   );
@@ -149,7 +150,7 @@ export async function renderRecapPNG(data) {
       ctx.font = '400 22px "DM Sans"';
       ctx.fillStyle = C.soft;
       const who = data.players[r.x.assignedTo]?.name ?? '';
-      ctx.fillText(`${who}’s pick · ${fmtDate(dateOf(r.x))}`, TEXT_X, y + 42 + r.lines.length * 38 + 2);
+      ctx.fillText(`${t('pngPick', who)} · ${fmtDate(dateOf(r.x))}`, TEXT_X, y + 42 + r.lines.length * 38 + 2);
     }
     y += r.h;
     if (i < rows.length - 1) {
@@ -162,7 +163,7 @@ export async function renderRecapPNG(data) {
   ctx.textAlign = 'center';
   ctx.fillStyle = C.ink;
   ctx.font = 'italic 400 34px Fraunces';
-  ctx.fillText('A to Z, together.', W / 2, H - 70);
+  ctx.fillText(t('pngFooter'), W / 2, H - 70);
   [C.p1, C.honey, C.p2].forEach((c, i) => {
     ctx.fillStyle = c;
     ctx.beginPath();
@@ -177,7 +178,7 @@ export async function saveOrShareImage(blob, filename) {
   const file = new File([blob], filename, { type: 'image/png' });
   if (navigator.canShare?.({ files: [file] }) && matchMedia('(pointer: coarse)').matches) {
     try {
-      await navigator.share({ files: [file], title: 'Our ABC Dates' });
+      await navigator.share({ files: [file], title: t('pngShareTitle') });
       return;
     } catch (err) {
       if (err?.name === 'AbortError') return;

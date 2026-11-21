@@ -1,4 +1,6 @@
 import './style.css';
+import { LANGS, getLang, locale, setLang, t } from './i18n.js';
+import { getTheme, setTheme } from './theme.js';
 import { ensureUser } from './firebase.js';
 import {
   ALPHABET, MAX_DESC, MAX_LOCATION, MAX_NAME, MIN_OPEN, SPACE_LEN, claimRole, completeLetter, createSeries,
@@ -6,7 +8,7 @@ import {
   markRoundSeen, needsPick, otherRole, parseCode, peekSeries, pickLetter, progress, renamePlayer, roleOf,
   roundInCycle, roundLetters, setPlan, startOver, subscribe, totalRounds,
 } from './game.js';
-import { IDEAS } from './ideas.js';
+import { ideasFor } from './ideas.js';
 import { confetti, playReveal, sparkle, toast } from './anim.js';
 import { copyText, exportText, renderRecapPNG, saveOrShareImage } from './export.js';
 import { downloadICS, googleCalendarUrl } from './calendar.js';
@@ -27,6 +29,8 @@ const state = {
   data: null,
   unsub: null,
   screen: null,
+  redraw: null, // re-renders the current screen in place (e.g. after a language switch)
+  keys: null, // { id, keys } — personal codes, cached for the settings sheet
   revealing: false,
   revealedRound: 0,
   newsSeenAt: 0,
@@ -40,13 +44,13 @@ const state = {
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '');
+const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString(locale(), { day: 'numeric', month: 'short' }) : '');
 const fmtDateLong = (ms) =>
-  ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  ms ? new Date(ms).toLocaleDateString(locale(), { day: 'numeric', month: 'long', year: 'numeric' }) : '';
 const fmtWhen = (ms) =>
-  new Date(ms).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  new Date(ms).toLocaleString(locale(), { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtWhenLong = (ms) =>
-  new Date(ms).toLocaleString(undefined, { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  new Date(ms).toLocaleString(locale(), { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 
 function tomorrowEvening() {
   const d = new Date();
@@ -113,10 +117,10 @@ function fail(err) {
   const offline = !navigator.onLine || ['unavailable', 'deadline-exceeded'].includes(err?.code)
     || /connection failed|offline/i.test(err?.message || '');
   const msg = offline
-    ? 'You seem to be offline — try again once you’re connected.'
+    ? t('offline')
     : err?.code === 'permission-denied'
-      ? 'That didn’t go through — you may not have access to this space.'
-      : err?.message || 'Something went wrong. Try again?';
+      ? t('denied')
+      : err?.message || t('genericError');
   toast(esc(msg), { tone: 'error' });
 }
 
@@ -129,7 +133,7 @@ async function share(url, title) {
       if (err?.name === 'AbortError') return;
     }
   }
-  if (await copyText(url)) toast('Link copied');
+  if (await copyText(url)) toast(t('linkCopied'));
 }
 
 /* ---------------------------------------------------------------- pieces */
@@ -151,11 +155,14 @@ const ICON = {
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
   dice: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="15" r="1.2" fill="currentColor" stroke="none"/></svg>',
   hand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-2a1.5 1.5 0 0 1 3 0V12M14 10.5a1.5 1.5 0 0 1 3 0V12M17 11a1.5 1.5 0 0 1 3 0v3a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L4.3 15a1.6 1.6 0 0 1 2.6-1.8L8 14.5"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>',
+  auto: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17Z" fill="currentColor" stroke="none"/></svg>',
 };
 
 const mark = (sm = false) => `<span class="mark${sm ? ' sm' : ''}" aria-hidden="true"><i>a</i><i>b</i><i>c</i></span>`;
 
-function header({ settings = true } = {}) {
+function header() {
   const d = state.data;
   const couple = d
     ? `<div class="couple">
@@ -167,17 +174,17 @@ function header({ settings = true } = {}) {
     <header class="topbar">
       <a href="/" class="brand" data-link>${mark()}<span>ABC Dates</span></a>
       ${couple}
-      ${settings && d ? `<button class="icon-btn" data-action="settings" aria-label="Settings">${ICON.gear}</button>` : ''}
+      <button class="icon-btn" data-action="settings" aria-label="${t('settings')}">${ICON.gear}</button>
     </header>`;
 }
 
-function linkBox(url, { label = 'Copy link', shareTitle = 'ABC Dates' } = {}) {
+function linkBox(url, { label = t('copyLink'), shareTitle = 'ABC Dates' } = {}) {
   return `
     <div class="linkbox">
       <span class="linkbox-url">${esc(url.replace(/^https?:\/\//, ''))}</span>
       <div class="linkbox-actions">
         <button class="btn soft sm" data-action="copy" data-value="${esc(url)}">${ICON.copy}<span>${label}</span></button>
-        <button class="btn soft sm icon-only" data-action="share" data-value="${esc(url)}" data-title="${esc(shareTitle)}" aria-label="Share">${ICON.share}</button>
+        <button class="btn soft sm icon-only" data-action="share" data-value="${esc(url)}" data-title="${esc(shareTitle)}" aria-label="${t('share')}">${ICON.share}</button>
       </div>
     </div>`;
 }
@@ -185,11 +192,11 @@ function linkBox(url, { label = 'Copy link', shareTitle = 'ABC Dates' } = {}) {
 function codeForm({ id = '', autofocus = false } = {}) {
   return `
     <form class="code-form" data-form="code">
-      <label class="label" for="code-input">Personal code</label>
+      <label class="label" for="code-input">${t('personalCode')}</label>
       <div class="row">
         <input id="code-input" name="code" class="input code" autocomplete="off" autocapitalize="characters"
           spellcheck="false" placeholder="${id ? `${esc(id)}-XXXXX` : 'XXXXXX-XXXXX'}" maxlength="13" required ${autofocus ? 'autofocus' : ''}>
-        <button class="btn primary">Open</button>
+        <button class="btn primary">${t('open')}</button>
       </div>
     </form>`;
 }
@@ -211,16 +218,16 @@ function segmented(name, options, checked) {
 }
 
 function optionsSummary(draw, preCount) {
-  const parts = [draw === 'manual' ? 'Pick yourselves' : 'Random draw'];
-  if (preCount) parts.push(`${preCount} already done`);
+  const parts = [draw === 'manual' ? t('pickYourselves') : t('randomDraw')];
+  if (preCount) parts.push(t('nAlreadyDone', preCount));
   return parts.join(' · ');
 }
 
-/** The quiet "Options" disclosure used when starting a series or a new alphabet. */
+/** The quiet "Options" disclosure used when starting a new alphabet. */
 function optionsPanel({ draw = 'random' } = {}) {
   return `
     <details class="options">
-      <summary>${ICON.sliders}<span>Options</span><span class="options-hint">${optionsSummary(draw, 0)}</span>${ICON.chevron}</summary>
+      <summary>${ICON.sliders}<span>${t('options')}</span><span class="options-hint">${optionsSummary(draw, 0)}</span>${ICON.chevron}</summary>
       ${optionsBody(draw)}
     </details>`;
 }
@@ -229,15 +236,15 @@ function optionsBody(draw = 'random') {
   return `
       <div class="options-body">
         <fieldset class="opt">
-          <legend class="label">How do you get your letters?</legend>
+          <legend class="label">${t('howGetLetters')}</legend>
           ${segmented('draw', [
-            { value: 'random', label: 'Random draw', icon: ICON.dice },
-            { value: 'manual', label: 'Pick yourselves', icon: ICON.hand },
+            { value: 'random', label: t('randomDraw'), icon: ICON.dice },
+            { value: 'manual', label: t('pickYourselves'), icon: ICON.hand },
           ], draw === 'manual' ? 'manual' : 'random')}
         </fieldset>
         <fieldset class="opt">
-          <legend class="label">Already done some letters?</legend>
-          <p class="fine">Tap the letters you’ve already had a date for. They won’t be drawn, and either of you can fill in the details later.</p>
+          <legend class="label">${t('alreadyDoneQ')}</legend>
+          <p class="fine">${t('alreadyDoneHelp')}</p>
           <div class="pre-grid">
             ${ALPHABET.map((l) => `<label class="pre"><input type="checkbox" name="pre" value="${l}"><span>${l}</span></label>`).join('')}
           </div>
@@ -263,28 +270,29 @@ function calBadge(ms, role) {
   const dt = new Date(ms);
   return `
     <div class="cal-badge ${role}" aria-hidden="true">
-      <span class="cal-month">${dt.toLocaleDateString(undefined, { month: 'short' })}</span>
+      <span class="cal-month">${dt.toLocaleDateString(locale(), { month: 'short' })}</span>
       <span class="cal-day">${dt.getDate()}</span>
     </div>`;
 }
 
 /* ---------------------------------------------------------------- screens */
 
-function renderLoading(text = 'Loading…') {
+function renderLoading(text = t('loading')) {
   mount('loading', `<main class="screen center"><div class="loader"><i></i><i></i><i></i></div><p class="muted">${text}</p></main>`);
 }
 
 function renderLanding() {
+  state.redraw = renderLanding;
   const spaces = recallSpaces();
   mount('landing', `
     <main class="screen landing">
-      <header class="topbar"><span class="brand">${mark()}<span>ABC Dates</span></span></header>
+      ${header()}
       <section class="hero">
         <div class="hero-tiles" aria-hidden="true">
           <span class="tile-xl p1">A</span><span class="tile-xl honey">B</span><span class="tile-xl p2">C</span>
         </div>
-        <h1>Twenty-six letters.<br><em>Twenty-six dates.</em></h1>
-        <p class="lede">Get a letter each, plan a date that starts with it, log what you did — and work your way from A to Z together.</p>
+        <h1>${t('heroTitle')}</h1>
+        <p class="lede">${t('heroLede')}</p>
       </section>
 
       ${spaces.length ? `
@@ -292,91 +300,96 @@ function renderLanding() {
           ${spaces.map((s) => `
             <a class="resume-card" href="/s/${esc(s.id)}" data-link>
               ${mark(true)}
-              <span class="resume-text"><b>${esc(s.me)}${s.partner ? ` &amp; ${esc(s.partner)}` : ''}</b><small>Continue your series</small></span>
+              <span class="resume-text"><b>${esc(s.me)}${s.partner ? ` &amp; ${esc(s.partner)}` : ''}</b><small>${t('continueSeries')}</small></span>
               ${ICON.arrow}
             </a>`).join('')}
         </section>` : ''}
 
-      <form class="card create" data-form="create">
-        <label class="label" for="name">Your name</label>
+      <form class="create" data-form="create">
         <div class="create-row">
-          <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="e.g. Alex" autocomplete="given-name" required>
-          <button type="button" class="btn soft icon-only opt-toggle" data-action="toggle" aria-controls="create-options" aria-expanded="false" aria-label="Options" title="Options">${ICON.sliders}<i class="opt-badge" hidden></i></button>
-          <button class="btn primary">Start ${ICON.arrow}</button>
+          <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="${t('namePrompt')}" aria-label="${t('namePrompt')}" autocomplete="given-name" required>
+          <button type="button" class="btn opt-toggle" data-action="toggle" aria-controls="create-options" aria-expanded="false" aria-label="${t('options')}" title="${t('options')}">${ICON.sliders}<i class="opt-badge" hidden></i></button>
+          <button class="btn primary">${t('start')} ${ICON.arrow}</button>
         </div>
         <div class="options create-options" id="create-options" hidden>${optionsBody()}</div>
       </form>
 
       <p class="create-foot">
-        <span>You’ll get a link to share</span>
+        <span>${t('willGetLink')}</span>
         <span class="sep" aria-hidden="true"></span>
-        <button type="button" class="link-btn" data-action="toggle" aria-controls="have-code" aria-expanded="false" data-focus="#code-input">On another device?</button>
+        <button type="button" class="link-btn" data-action="toggle" aria-controls="have-code" aria-expanded="false" data-focus="#code-input">${t('otherDevice')}</button>
       </p>
       <div class="have-code" id="have-code" hidden>
-        <p class="muted">Enter the personal code from <b>Settings → Your other devices</b> on your first device.</p>
+        <p class="muted">${t('enterCode')}</p>
         ${codeForm()}
       </div>
 
       <section class="how">
-        <div class="how-step"><span class="how-num">1</span><h3>Invite</h3><p>Start a series and send the link to your person.</p></div>
-        <div class="how-step"><span class="how-num">2</span><h3>Draw</h3><p>You each get a letter — at random, or pick your own. Plan a date around it.</p></div>
-        <div class="how-step"><span class="how-num">3</span><h3>Log</h3><p>Write down what you did. When you’re both done, the next round begins.</p></div>
+        <h2 class="eyebrow how-title">${t('howTitle')}</h2>
+        <ol class="how-steps">
+          <li class="how-step"><span class="how-num">1</span><div><h3>${t('step1Title')}</h3><p>${t('step1')}</p></div></li>
+          <li class="how-step"><span class="how-num">2</span><div><h3>${t('step2Title')}</h3><p>${t('step2')}</p></div></li>
+          <li class="how-step"><span class="how-num">3</span><div><h3>${t('step3Title')}</h3><p>${t('step3')}</p></div></li>
+        </ol>
       </section>
-      <footer class="foot">Made for two. ♡</footer>
+      <footer class="foot">${t('foot')}</footer>
     </main>`);
 }
 
 function renderJoin(d) {
+  state.redraw = () => renderJoin(d);
   const manual = drawMode(d) === 'manual';
   const pre = progress(d);
   mount('join', `
     <main class="screen narrow">
-      ${header({ settings: false })}
+      ${header()}
       <section class="hero small">
         <div class="hero-tiles sm" aria-hidden="true"><span class="tile-xl p1">${esc(d.players.p1.name[0]?.toUpperCase() || 'A')}</span><span class="tile-xl honey">&amp;</span><span class="tile-xl p2">?</span></div>
-        <p class="eyebrow">You’re invited</p>
-        <h1><span class="ink-p1">${esc(d.players.p1.name)}</span> wants to go on ${26 - pre} dates with you.</h1>
-        <p class="lede">One letter each, one date per letter, all the way from A to Z.${pre ? ` (${pre} ${pre === 1 ? 'letter is' : 'letters are'} already ticked off.)` : ''}</p>
+        <p class="eyebrow">${t('invited')}</p>
+        <h1>${t('joinTitle', esc(d.players.p1.name), 26 - pre)}</h1>
+        <p class="lede">${t('joinLede')}${pre ? t('joinPre', pre) : ''}</p>
       </section>
       <form class="card" data-form="join">
-        <label class="label" for="name">Your name</label>
-        <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="e.g. Sam" autocomplete="given-name" required autofocus>
-        <button class="btn primary block">${manual ? 'Join &amp; pick our first letters' : 'Join &amp; draw our first letters'} ${ICON.arrow}</button>
+        <label class="label" for="name">${t('yourName')}</label>
+        <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="${t('joinPlaceholder')}" autocomplete="given-name" required autofocus>
+        <button class="btn primary block">${manual ? t('joinPick') : t('joinDraw')} ${ICON.arrow}</button>
       </form>
     </main>`);
 }
 
 function renderLocked(id, message = '') {
+  state.redraw = () => renderLocked(id, message);
   mount('locked', `
     <main class="screen narrow">
-      ${header({ settings: false })}
+      ${header()}
       <section class="hero small">
         <div class="hero-tiles sm" aria-hidden="true"><span class="tile-xl p1">?</span><span class="tile-xl honey">?</span></div>
-        <p class="eyebrow">Private space</p>
-        <h1>This series is already full.</h1>
-        <p class="lede">${message ? esc(message) + ' ' : ''}If you’re one of the two players, enter your personal code — or ask your partner to send you your link from <b>Settings</b>.</p>
+        <p class="eyebrow">${t('privateSpace')}</p>
+        <h1>${t('seriesFull')}</h1>
+        <p class="lede">${message ? esc(message) + ' ' : ''}${t('lockedLede')}</p>
       </section>
       <div class="card">${codeForm({ id, autofocus: true })}</div>
-      <p class="center-text"><a href="/" data-link class="text-link">Start your own series instead</a></p>
+      <p class="center-text"><a href="/" data-link class="text-link">${t('startOwn')}</a></p>
     </main>`);
 }
 
 function renderWaiting() {
+  state.redraw = renderWaiting;
   const d = state.data;
   mount('waiting', `
     <main class="screen narrow">
       ${header()}
       <section class="hero small">
         <div class="shuffle" aria-hidden="true"><span class="tile-xl p1 s1">A</span><span class="tile-xl honey s2">B</span><span class="tile-xl p2 s3">C</span></div>
-        <p class="eyebrow">Almost there</p>
-        <h1>Invite your person.</h1>
-        <p class="lede">Send them this link. The moment they join, you’ll each ${drawMode(d) === 'manual' ? 'pick' : 'draw'} your first letter.</p>
+        <p class="eyebrow">${t('almostThere')}</p>
+        <h1>${t('inviteTitle')}</h1>
+        <p class="lede">${t('waitLede', drawMode(d) === 'manual')}</p>
       </section>
       <div class="card">
-        ${linkBox(spaceUrl(state.id), { label: 'Copy invite', shareTitle: `${d.players.p1.name} invited you to ABC Dates` })}
-        <div class="waiting-line"><span class="pulse"></span>Waiting for your partner to join…</div>
+        ${linkBox(spaceUrl(state.id), { label: t('copyInvite'), shareTitle: t('invitedYou', d.players.p1.name) })}
+        <div class="waiting-line"><span class="pulse"></span>${t('waitingPartner')}</div>
       </div>
-      <p class="fine center-text">Testing alone? Open the link in a private window.</p>
+      <p class="fine center-text">${t('testingAlone')}</p>
     </main>`);
 }
 
@@ -386,21 +399,22 @@ function roundCard({ letter, role, pick }) {
   const d = state.data;
   const mine = role === state.role;
   const owner = d.players[role];
-  const ownerLabel = mine ? 'Your letter' : `${esc(owner.name)}’s letter`;
+  const ownerLabel = mine ? t('yourLetter') : t('theirLetter', esc(owner.name));
   const top = (extra = '') => `<div class="rc-top"><span class="rc-owner"><span class="dot ${role}"></span>${ownerLabel}</span>${extra}</div>`;
+  const ideas = (l) => `${t('ideas')} ${ideasFor(l).slice(0, 2).map(esc).join(' · ')}`;
 
   if (pick) {
     return mine
       ? `<button class="round-card ${role} mine pick" data-action="pick">
           ${top()}
           <div class="rc-letter">?</div>
-          <p class="rc-ideas">Choose any letter that’s still open.</p>
-          <span class="rc-cta"><span class="wide-only">Pick your letter</span><span class="narrow-only">Pick</span>${ICON.arrow}</span>
+          <p class="rc-ideas">${t('chooseAnyOpen')}</p>
+          <span class="rc-cta"><span class="wide-only">${t('pickYourLetter')}</span><span class="narrow-only">${t('pickShort')}</span>${ICON.arrow}</span>
         </button>`
       : `<div class="round-card ${role} theirs">
           ${top()}
           <div class="rc-letter">?</div>
-          <p class="rc-wait">${esc(owner.name)} is choosing a letter<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>
+          <p class="rc-wait">${t('isChoosing', esc(owner.name))}<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>
         </div>`;
   }
 
@@ -408,9 +422,9 @@ function roundCard({ letter, role, pick }) {
   if (x.status === 'DONE') {
     return `
       <div class="round-card ${role} done" data-letter="${letter}">
-        ${top(`<span class="rc-badge" aria-label="Done">${ICON.check}<span class="wide-only">Done</span></span>`)}
+        ${top(`<span class="rc-badge" aria-label="${t('done')}">${ICON.check}<span class="wide-only">${t('done')}</span></span>`)}
         <div class="rc-letter">${letter}</div>
-        <p class="rc-desc">“${esc(x.description)}”</p>
+        <p class="rc-desc">${t('quote', esc(x.description))}</p>
       </div>`;
   }
   if (mine) {
@@ -418,13 +432,13 @@ function roundCard({ letter, role, pick }) {
       <div class="round-card ${role} mine" data-letter="${letter}">
         ${top()}
         <div class="rc-letter">${letter}</div>
-        ${x.plannedAt ? planChip(letter, { action: 'plan' }) : `<p class="rc-ideas">Ideas: ${IDEAS[letter].slice(0, 2).map(esc).join(' · ')}</p>`}
+        ${x.plannedAt ? planChip(letter, { action: 'plan' }) : `<p class="rc-ideas">${ideas(letter)}</p>`}
         <div class="rc-actions">
           ${x.plannedAt
-            ? `<button class="rc-cta" data-action="log" data-letter="${letter}">${ICON.check}<span class="wide-only">Log our ${letter} date</span><span class="narrow-only">Log it</span></button>
-               <button class="rc-icon" data-action="calendar" data-letter="${letter}" aria-label="Add to calendar" title="Add to calendar">${ICON.calPlus}</button>`
-            : `<button class="rc-cta" data-action="plan" data-letter="${letter}">${ICON.calPlus}<span class="wide-only">Plan the date</span><span class="narrow-only">Plan it</span></button>
-               <button class="rc-icon" data-action="log" data-letter="${letter}" aria-label="Already done? Log it" title="Already done? Log it">${ICON.check}</button>`}
+            ? `<button class="rc-cta" data-action="log" data-letter="${letter}">${ICON.check}<span class="wide-only">${t('logOur', letter)}</span><span class="narrow-only">${t('logShort')}</span></button>
+               <button class="rc-icon" data-action="calendar" data-letter="${letter}" aria-label="${t('addToCalendar')}" title="${t('addToCalendar')}">${ICON.calPlus}</button>`
+            : `<button class="rc-cta" data-action="plan" data-letter="${letter}">${ICON.calPlus}<span class="wide-only">${t('planTheDate')}</span><span class="narrow-only">${t('planShort')}</span></button>
+               <button class="rc-icon" data-action="log" data-letter="${letter}" aria-label="${t('alreadyDoneLog')}" title="${t('alreadyDoneLog')}">${ICON.check}</button>`}
         </div>
       </div>`;
   }
@@ -433,8 +447,8 @@ function roundCard({ letter, role, pick }) {
       ${top()}
       <div class="rc-letter">${letter}</div>
       ${x.plannedAt
-        ? `<p class="rc-wait">${esc(owner.name)} has a plan:</p>${planChip(letter)}`
-        : `<p class="rc-wait">${esc(owner.name)} is planning something<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>`}
+        ? `<p class="rc-wait">${t('hasPlan', esc(owner.name))}</p>${planChip(letter)}`
+        : `<p class="rc-wait">${t('isPlanning', esc(owner.name))}<span class="dots"><i>.</i><i>.</i><i>.</i></span></p>`}
     </div>`;
 }
 
@@ -449,18 +463,18 @@ function roundHeadline(d, cards) {
   const mine = cards.find((c) => c.role === state.role);
   const theirs = cards.find((c) => c.role !== state.role);
   const isDoneCard = (c) => c && !c.pick && d.letters[c.letter].status === 'DONE';
-  if (!mine) return isDoneCard(theirs) ? 'That was the last one!' : `Last letter — it’s ${pName}’s.`;
-  if (mine.pick) return theirs && !theirs.pick ? `${pName} picked ${theirs.letter}. Your turn to choose.` : 'Pick a letter — any letter.';
-  if (!theirs) return isDoneCard(mine) ? 'That was the last one!' : 'Last letter. Make it count.';
-  if (isDoneCard(mine) && theirs.pick) return `Nice one. ${pName} still has to pick.`;
-  if (isDoneCard(mine) && !isDoneCard(theirs)) return `Nice one. Now it’s ${pName}’s turn.`;
-  if (!isDoneCard(mine) && isDoneCard(theirs)) return `${pName} is done — your move.`;
+  if (!mine) return isDoneCard(theirs) ? t('hlLastOne') : t('hlLastTheirs', pName);
+  if (mine.pick) return theirs && !theirs.pick ? t('hlPickedYourTurn', pName, theirs.letter) : t('hlPickAny');
+  if (!theirs) return isDoneCard(mine) ? t('hlLastOne') : t('hlLastMine');
+  if (isDoneCard(mine) && theirs.pick) return t('hlNiceStillPick', pName);
+  if (isDoneCard(mine) && !isDoneCard(theirs)) return t('hlNiceTheirTurn', pName);
+  if (!isDoneCard(mine) && isDoneCard(theirs)) return t('hlTheyreDone', pName);
   const mineX = d.letters[mine.letter];
-  if (mineX.plannedAt > Date.now()) return `Your ${mine.letter} date is coming up.`;
-  if (mineX.plannedAt) return `How was your ${mine.letter} date?`;
-  if (!theirs.pick && d.letters[theirs.letter]?.plannedAt) return `${pName} has a plan. Your move.`;
-  if (roundInCycle(d) === 1) return `Plan something with ${mine.letter}.`;
-  return 'Two letters, two dates.';
+  if (mineX.plannedAt > Date.now()) return t('hlComingUp', mine.letter);
+  if (mineX.plannedAt) return t('hlHowWas', mine.letter);
+  if (!theirs.pick && d.letters[theirs.letter]?.plannedAt) return t('hlTheyHavePlan', pName);
+  if (roundInCycle(d) === 1) return t('hlPlanWith', mine.letter);
+  return t('hlTwoLetters');
 }
 
 /* ---- alphabet board */
@@ -473,9 +487,9 @@ function tile(letter, prev, pickable) {
   const cls = ['tile', x.status.toLowerCase(), role, justDone ? 'just' : '', role === state.role ? 'own' : '', canPick ? 'pickable' : ''].join(' ');
   const label = {
     DONE: `${letter}: ${x.description}`,
-    PREDONE: `${letter}: done before you started — tap to fill in`,
-    ACTIVE: `${letter}: in play`,
-    UNUSED: canPick ? `${letter}: pick this letter` : `${letter}: not drawn yet`,
+    PREDONE: t('tilePre', letter),
+    ACTIVE: t('tileActive', letter),
+    UNUSED: canPick ? t('tilePick', letter) : t('tileUnused', letter),
   }[x.status];
   const inert = x.status === 'UNUSED' && !canPick;
   return `<button class="${cls}" data-action="tile" data-letter="${letter}" aria-label="${esc(label)}" ${inert ? 'tabindex="-1"' : ''}><span>${letter}</span></button>`;
@@ -490,17 +504,17 @@ function board(prev) {
   const left = count((x) => x.status === 'UNUSED');
   const pickable = needsPick(d, state.role);
   return `
-    <section class="panel board">
-      <div class="panel-head">
-        <h2 class="h-sm">The alphabet</h2>
+    <section class="sec board">
+      <div class="sec-head">
+        <h2 class="h-sec">${t('theAlphabet')}</h2>
         <span class="count"><b>${done}</b>/26</span>
       </div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="26" aria-valuenow="${done}">
         <span class="bar-seg honey" style="width:${(pre / 26) * 100}%"></span><span class="bar-seg p1" style="width:${(by('p1') / 26) * 100}%"></span><span class="bar-seg p2" style="width:${(by('p2') / 26) * 100}%"></span>
       </div>
-      ${pickable ? '<p class="board-hint">Tap an open letter to make it yours.</p>' : ''}
+      ${pickable ? `<p class="board-hint">${t('tapOpen')}</p>` : ''}
       <div class="grid ${pickable ? 'picking' : ''}">${ALPHABET.map((l) => tile(l, prev, pickable)).join('')}</div>
-      <p class="fine legend"><span><i class="lg done"></i>done</span><span><i class="lg active"></i>in play</span><span><i class="lg unused"></i>still to come · ${left} left</span></p>
+      <p class="fine legend"><span><i class="lg done"></i>${t('lgDone')}</span><span><i class="lg active"></i>${t('lgActive')}</span><span><i class="lg unused"></i>${t('lgUnused', left)}</span></p>
     </section>`;
 }
 
@@ -513,26 +527,27 @@ function memoryItem(letter) {
         <button class="memory" data-action="tile" data-letter="${letter}">
           <span class="badge honey">${letter}</span>
           <span class="memory-text">
-            <span class="memory-desc muted-desc">Done before you started</span>
-            <span class="memory-meta">Tap to add the details</span>
+            <span class="memory-desc muted-desc">${t('preDesc')}</span>
+            <span class="memory-meta">${t('preMeta')}</span>
           </span>
         </button>
       </li>`;
   }
-  const who = x.assignedTo === state.role ? 'Your' : `${esc(d.players[x.assignedTo]?.name)}’s`;
+  const who = x.assignedTo === state.role ? t('yourPick') : t('theirPick', esc(d.players[x.assignedTo]?.name));
   return `
     <li>
       <button class="memory" data-action="tile" data-letter="${letter}">
         <span class="badge ${x.assignedTo}">${letter}</span>
         <span class="memory-text">
           <span class="memory-desc">${esc(x.description)}</span>
-          <span class="memory-meta">${who} pick · ${fmtDate(dateOf(x))}${x.location ? ` · ${esc(x.location)}` : ''}</span>
+          <span class="memory-meta">${who} · ${fmtDate(dateOf(x))}${x.location ? ` · ${esc(x.location)}` : ''}</span>
         </span>
       </button>
     </li>`;
 }
 
 function renderDashboard(prev) {
+  state.redraw = () => renderDashboard();
   const d = state.data;
   const cards = currentCards(d);
   const memories = ALPHABET.filter((l) => d.letters[l].status === 'DONE')
@@ -543,21 +558,21 @@ function renderDashboard(prev) {
     <main class="screen dash">
       ${header()}
       <div class="dash-grid">
-        <section class="panel round">
-          <p class="eyebrow">Round ${roundInCycle(d)} of ${totalRounds(d)}</p>
+        <section class="sec round">
+          <p class="eyebrow">${t('roundOf', roundInCycle(d), totalRounds(d))}</p>
           <h1 class="h-md">${roundHeadline(d, cards)}</h1>
           <div class="round-cards">${cards.map(roundCard).join('')}</div>
         </section>
         ${board(prev)}
-        <section class="panel memories">
-          <div class="panel-head"><h2 class="h-sm">Memory book</h2>${memories.length ? `<span class="count">${memories.length} ${memories.length === 1 ? 'date' : 'dates'}</span>` : ''}</div>
+        <section class="sec memories">
+          <div class="sec-head"><h2 class="h-sec">${t('memoryBook')}</h2>${memories.length ? `<span class="count">${t('nDates', memories.length)}</span>` : ''}</div>
           ${memories.length
             ? `<ul class="memory-list">${memories.map(memoryItem).join('')}</ul>`
-            : '<p class="empty">Your first date will land here once you log it.</p>'}
+            : `<p class="empty">${t('memoryEmpty')}</p>`}
           ${pre.length ? `
             <div class="pre-note">
-              <p class="fine">Done before you started — tap one to add the details:</p>
-              <div class="pre-chips">${pre.map((l) => `<button class="badge honey sm" data-action="tile" data-letter="${l}" aria-label="Fill in ${l}">${l}</button>`).join('')}</div>
+              <p class="fine">${t('preNote')}</p>
+              <div class="pre-chips">${pre.map((l) => `<button class="badge honey sm" data-action="tile" data-letter="${l}" aria-label="${t('fillInLetter', l)}">${l}</button>`).join('')}</div>
             </div>` : ''}
         </section>
       </div>
@@ -565,32 +580,34 @@ function renderDashboard(prev) {
 }
 
 function renderCompleted(prev) {
+  state.redraw = () => renderCompleted();
   const d = state.data;
   const times = ALPHABET.map((l) => d.letters[l]).filter((x) => x.status === 'DONE').map(dateOf).filter(Boolean);
   const days = times.length ? Math.max(1, Math.round((Math.max(...times) - Math.min(...times)) / 864e5)) : 0;
+  const cycles = d.cycle || 1;
   mount('completed', `
     <main class="screen dash">
       ${header()}
       <section class="celebrate">
         <div class="hero-tiles" aria-hidden="true"><span class="tile-xl p1">A</span><span class="tile-xl honey">♡</span><span class="tile-xl p2">Z</span></div>
-        <p class="eyebrow">Series complete</p>
-        <h1>You’re all done!<br><em>A to Z, together.</em></h1>
+        <p class="eyebrow">${t('seriesComplete')}</p>
+        <h1>${t('allDone')}</h1>
         <div class="stats">
-          <div><b>26</b><span>dates</span></div>
-          <div><b>${days}</b><span>${days === 1 ? 'day' : 'days'}</span></div>
-          <div><b>${d.cycle || 1}</b><span>${(d.cycle || 1) === 1 ? 'alphabet' : 'alphabets'}</span></div>
+          <div><b>26</b><span>${t('statDates')}</span></div>
+          <div><b>${days}</b><span>${t('statDays', days)}</span></div>
+          <div><b>${cycles}</b><span>${t('statAlphabets', cycles)}</span></div>
         </div>
         <div class="export-row">
-          <button class="btn primary" data-action="export-png">${ICON.image}<span>Save recap image</span></button>
-          <button class="btn soft" data-action="export-text">${ICON.text}<span>Copy as text</span></button>
+          <button class="btn primary" data-action="export-png">${ICON.image}<span>${t('saveRecap')}</span></button>
+          <button class="btn soft" data-action="export-text">${ICON.text}<span>${t('copyAsText')}</span></button>
         </div>
       </section>
-      <section class="panel memories">
-        <div class="panel-head"><h2 class="h-sm">Your alphabet</h2></div>
+      <section class="sec memories">
+        <div class="sec-head"><h2 class="h-sec">${t('yourAlphabet')}</h2></div>
         <ul class="memory-list">${ALPHABET.map(memoryItem).join('')}</ul>
       </section>
       <div class="center-text again">
-        <button class="btn ghost" data-action="start-over">Start a new alphabet</button>
+        <button class="btn ghost" data-action="start-over">${t('newAlphabet')}</button>
       </div>
     </main>`);
 
@@ -603,13 +620,23 @@ function renderCompleted(prev) {
 
 /* ------------------------------------------------------------------ sheets */
 
-function openSheet(html, { onMount, className = '' } = {}) {
+/**
+ * `inPlace` swaps the content of an already-open sheet without replaying its
+ * entrance animation (used when the settings sheet re-renders itself).
+ */
+function openSheet(html, { onMount, className = '', inPlace = false } = {}) {
+  const scroller = sheet.querySelector('.sheet-scroll');
   sheet.className = `sheet ${className}`;
-  sheet.innerHTML = `
-    <div class="sheet-card">
-      <button class="icon-btn sheet-close" data-action="close-sheet" aria-label="Close">${ICON.close}</button>
-      <div class="sheet-scroll" tabindex="-1" autofocus>${html}</div>
-    </div>`;
+  if (inPlace && sheet.open && scroller) {
+    scroller.innerHTML = html;
+    sheet.querySelector('.sheet-close')?.setAttribute('aria-label', t('close'));
+  } else {
+    sheet.innerHTML = `
+      <div class="sheet-card">
+        <button class="icon-btn sheet-close" data-action="close-sheet" aria-label="${t('close')}">${ICON.close}</button>
+        <div class="sheet-scroll" tabindex="-1" autofocus>${html}</div>
+      </div>`;
+  }
   if (!sheet.open) sheet.showModal();
   onMount?.(sheet);
 }
@@ -661,18 +688,19 @@ const descField = (value = '', placeholder = '') => `
 function openLogSheet(letter, { edit = false } = {}) {
   const x = state.data.letters[letter];
   const value = edit ? x.description : '';
+  const ideas = ideasFor(letter);
   openSheet(`
     <form class="sheet-body" data-form="log" data-letter="${letter}" data-edit="${edit ? '1' : ''}">
       <div class="sheet-letter ${x.assignedTo}">${letter}</div>
-      <h2 class="h-md">${edit ? `Edit your ${letter} date` : `What did you do for ${letter}?`}</h2>
-      <p class="muted">A few words for the memory book.</p>
-      ${descField(value, `e.g. ${IDEAS[letter][0]} & late-night snacks`)}
+      <h2 class="h-md">${edit ? t('editYourDate', letter) : t('whatDidYouDo', letter)}</h2>
+      <p class="muted">${t('fewWords')}</p>
+      ${descField(value, t('logPlaceholder', ideas[0]))}
       ${edit ? '' : `
         <div class="ideas">
-          <span class="fine">Quick start:</span>
-          ${IDEAS[letter].map((i) => `<button type="button" class="chip" data-action="idea" data-value="${esc(i)}">${esc(i)}</button>`).join('')}
+          <span class="fine">${t('quickStart')}</span>
+          ${ideas.map((i) => `<button type="button" class="chip" data-action="idea" data-value="${esc(i)}">${esc(i)}</button>`).join('')}
         </div>`}
-      <button class="btn primary block">${edit ? 'Save changes' : `Save our ${letter} date`}</button>
+      <button class="btn primary block">${edit ? t('saveChanges') : t('saveOurDate', letter)}</button>
     </form>`, { className: x.assignedTo, onMount: (el) => wireTextarea(el) });
 }
 
@@ -683,10 +711,10 @@ function openDetailSheet(letter) {
   openSheet(`
     <div class="sheet-body">
       <div class="sheet-letter ${x.assignedTo}">${letter}</div>
-      <p class="eyebrow">${x.assignedTo === state.role ? 'Your pick' : `${esc(d.players[x.assignedTo]?.name)}’s pick`} · ${fmtDateLong(dateOf(x))}</p>
-      <p class="quote">“${esc(x.description)}”</p>
+      <p class="eyebrow">${x.assignedTo === state.role ? t('yourPick') : t('theirPick', esc(d.players[x.assignedTo]?.name))} · ${fmtDateLong(dateOf(x))}</p>
+      <p class="quote">${t('quote', esc(x.description))}</p>
       ${x.location ? `<p class="muted where">${ICON.pin}<span>${esc(x.location)}</span></p>` : ''}
-      ${canEdit ? `<button class="btn soft block" data-action="edit" data-letter="${letter}">${ICON.edit}<span>Edit description</span></button>` : ''}
+      ${canEdit ? `<button class="btn soft block" data-action="edit" data-letter="${letter}">${ICON.edit}<span>${t('editDescription')}</span></button>` : ''}
     </div>`, { className: x.assignedTo });
 }
 
@@ -695,16 +723,17 @@ function openPickSheet(preselect = null) {
   const d = state.data;
   const open = ALPHABET.filter((l) => d.letters[l].status === 'UNUSED');
   const sel = open.includes(preselect) ? preselect : null;
+  const ideaLine = (l) => `${t('ideas')} ${ideasFor(l).join(' · ')}`;
   openSheet(`
     <form class="sheet-body" data-form="pick">
-      <p class="eyebrow">Round ${roundInCycle(d)} of ${totalRounds(d)}</p>
-      <h2 class="h-md">Pick your letter</h2>
-      <p class="muted">Any letter that’s still open. Once it’s yours, it’s yours.</p>
+      <p class="eyebrow">${t('roundOf', roundInCycle(d), totalRounds(d))}</p>
+      <h2 class="h-md">${t('pickTitle')}</h2>
+      <p class="muted">${t('pickLede')}</p>
       <div class="pick-grid ${state.role}">
         ${open.map((l) => `<label class="pick-opt"><input type="radio" name="letter" value="${l}" ${l === sel ? 'checked' : ''} required><span>${l}</span></label>`).join('')}
       </div>
-      <p class="fine pick-ideas">${sel ? `Ideas: ${IDEAS[sel].map(esc).join(' · ')}` : '&nbsp;'}</p>
-      <button class="btn primary block" ${sel ? '' : 'disabled'}>${sel ? `Take ${sel}` : 'Choose a letter'}</button>
+      <p class="fine pick-ideas">${sel ? esc(ideaLine(sel)) : '&nbsp;'}</p>
+      <button class="btn primary block" ${sel ? '' : 'disabled'}>${sel ? t('takeLetter', sel) : t('chooseLetter')}</button>
     </form>`, {
     className: state.role,
     onMount: (el) => {
@@ -713,8 +742,8 @@ function openPickSheet(preselect = null) {
       el.querySelector('form').addEventListener('change', (e) => {
         const l = e.target.value;
         btn.disabled = false;
-        btn.textContent = `Take ${l}`;
-        ideas.textContent = `Ideas: ${IDEAS[l].join(' · ')}`;
+        btn.textContent = t('takeLetter', l);
+        ideas.textContent = ideaLine(l);
       });
     },
   });
@@ -728,18 +757,18 @@ function openPlanSheet(letter) {
       <div class="sheet-head">
         <div class="sheet-letter sm ${x.assignedTo}">${letter}</div>
         <div>
-          <h2 class="h-md">${x.plannedAt ? `Move your ${letter} date` : `When’s your ${letter} date?`}</h2>
-          <p class="muted">${esc(pName)} gets a heads-up to add it to their calendar.</p>
+          <h2 class="h-md">${x.plannedAt ? t('moveDate', letter) : t('whensDate', letter)}</h2>
+          <p class="muted">${t('headsUp', esc(pName))}</p>
         </div>
       </div>
-      ${datePicker({ name: 'when', value: x.plannedAt || tomorrowEvening(), time: true, min: Date.now(), label: 'Date and time', role: x.assignedTo })}
+      ${datePicker({ name: 'when', value: x.plannedAt || tomorrowEvening(), time: true, min: Date.now(), label: t('dateAndTime'), role: x.assignedTo })}
       <div class="plan-fields">
-        <label class="label" for="plan-where">${ICON.pin}Where <span class="opt-tag">optional</span></label>
-        <input id="plan-where" name="where" class="input" maxlength="${MAX_LOCATION}" value="${esc(x.location || '')}" placeholder="e.g. The night market on 5th" autocomplete="off">
+        <label class="label" for="plan-where">${ICON.pin}${t('where')} <span class="opt-tag">${t('optional')}</span></label>
+        <input id="plan-where" name="where" class="input" maxlength="${MAX_LOCATION}" value="${esc(x.location || '')}" placeholder="${t('wherePlaceholder')}" autocomplete="off">
       </div>
       <div class="sheet-actions">
-        ${x.plannedAt ? `<button type="button" class="btn ghost" data-action="clear-plan" data-letter="${letter}">Remove</button>` : ''}
-        <button class="btn primary">${ICON.check}<span>Save the date</span></button>
+        ${x.plannedAt ? `<button type="button" class="btn ghost" data-action="clear-plan" data-letter="${letter}">${t('remove')}</button>` : ''}
+        <button class="btn primary">${ICON.check}<span>${t('saveTheDate')}</span></button>
       </div>
     </form>`, { className: `wide ${x.assignedTo}`, onMount: wireDatePickers });
 }
@@ -750,10 +779,10 @@ function calEvent(letter) {
   const ownerName = d.players[x.assignedTo]?.name;
   return {
     uid: `${state.id}-${d.cycle || 1}-${letter}@abc-dates`,
-    title: `${letter} date with ${partner()?.name ?? ''}`.trim(),
+    title: t('calTitle', letter, partner()?.name ?? '').trim(),
     start: x.plannedAt,
     location: x.location || '',
-    details: `ABC Dates — the ${letter} date (${ownerName}’s pick).`,
+    details: t('calDetails', letter, ownerName),
     url: spaceUrl(state.id),
   };
 }
@@ -764,22 +793,22 @@ function openCalendarSheet(letter, { proactive = false, justSaved = false } = {}
   if (!x.plannedAt) return;
   const mine = x.assignedTo === state.role;
   const eyebrow = proactive
-    ? `${esc(d.players[x.plannedBy || x.assignedTo]?.name)} planned the ${letter} date`
-    : justSaved ? 'Saved ♡' : `${mine ? 'Your' : `${esc(d.players[x.assignedTo]?.name)}’s`} ${letter} date`;
+    ? t('plannedThe', esc(d.players[x.plannedBy || x.assignedTo]?.name), letter)
+    : justSaved ? t('savedHeart') : mine ? t('yourLDate', letter) : t('theirLDate', esc(d.players[x.assignedTo]?.name), letter);
   openSheet(`
     <div class="sheet-body">
       ${calBadge(x.plannedAt, x.assignedTo)}
       <p class="eyebrow">${eyebrow}</p>
       <h2 class="h-md">${esc(fmtWhenLong(x.plannedAt))}</h2>
       ${x.location ? `<p class="muted where">${ICON.pin}<span>${esc(x.location)}</span></p>` : ''}
-      <p class="muted">${proactive ? 'Want to put it in your calendar?' : 'Add it to your calendar so neither of you forgets.'}</p>
+      <p class="muted">${proactive ? t('wantCalendar') : t('addSoNoForget')}</p>
       <div class="cal-actions">
-        <button class="btn primary block" data-action="ics" data-letter="${letter}">${ICON.calPlus}<span>Add to calendar</span></button>
-        <a class="btn soft block" href="${esc(googleCalendarUrl(calEvent(letter)))}" target="_blank" rel="noopener">Google Calendar</a>
+        <button class="btn primary block" data-action="ics" data-letter="${letter}">${ICON.calPlus}<span>${t('addToCalendar')}</span></button>
+        <a class="btn soft block" href="${esc(googleCalendarUrl(calEvent(letter)))}" target="_blank" rel="noopener">${t('googleCalendar')}</a>
       </div>
       <div class="row center">
-        ${mine && x.status === 'ACTIVE' ? `<button class="btn ghost sm" data-action="plan" data-letter="${letter}">${ICON.edit}<span>Change</span></button>` : ''}
-        <button class="btn ghost sm" data-action="close-sheet">${proactive || justSaved ? 'Not now' : 'Close'}</button>
+        ${mine && x.status === 'ACTIVE' ? `<button class="btn ghost sm" data-action="plan" data-letter="${letter}">${ICON.edit}<span>${t('change')}</span></button>` : ''}
+        <button class="btn ghost sm" data-action="close-sheet">${proactive || justSaved ? t('notNow') : t('close')}</button>
       </div>
     </div>`, { className: x.assignedTo });
 }
@@ -789,10 +818,10 @@ function openHappenedSheet(letter) {
   openSheet(`
     <div class="sheet-body">
       <div class="sheet-letter ${x.assignedTo}">${letter}</div>
-      <h2 class="h-md">Did your ${letter} date happen?</h2>
-      <p class="muted">It was planned for ${esc(fmtWhen(x.plannedAt))}${x.location ? ` at ${esc(x.location)}` : ''}.</p>
-      <button class="btn primary block" data-action="log" data-letter="${letter}">${ICON.check}<span>Yes — let’s log it</span></button>
-      <button class="btn soft block" data-action="plan" data-letter="${letter}">${ICON.calendar}<span>Not yet — set a new time</span></button>
+      <h2 class="h-md">${t('didHappen', letter)}</h2>
+      <p class="muted">${t('plannedFor', esc(fmtWhen(x.plannedAt)), x.location ? esc(x.location) : '')}</p>
+      <button class="btn primary block" data-action="log" data-letter="${letter}">${ICON.check}<span>${t('yesLog')}</span></button>
+      <button class="btn soft block" data-action="plan" data-letter="${letter}">${ICON.calendar}<span>${t('notYet')}</span></button>
     </div>`, { className: x.assignedTo });
 }
 
@@ -803,22 +832,22 @@ function openFillSheet(letter) {
   openSheet(`
     <form class="sheet-body" data-form="fill" data-letter="${letter}">
       <div class="sheet-letter honey">${letter}</div>
-      <h2 class="h-md">Your ${letter} date, before it all began</h2>
-      <p class="muted">You’d already done this one. Add it to the memory book?</p>
-      ${descField('', `e.g. ${IDEAS[letter][0]}`)}
+      <h2 class="h-md">${t('fillTitle', letter)}</h2>
+      <p class="muted">${t('fillLede')}</p>
+      ${descField('', t('logPlaceholder', ideasFor(letter)[0]))}
       <fieldset class="opt plan-fields">
-        <legend class="label">Who planned it?</legend>
+        <legend class="label">${t('whoPlanned')}</legend>
         ${segmented('by', [
           { value: state.role, label: esc(me().name), role: state.role },
           { value: pRole, label: esc(d.players[pRole]?.name), role: pRole },
         ], state.role)}
       </fieldset>
       <fieldset class="opt plan-fields">
-        <legend class="label">${ICON.calendar}When was it? <span class="opt-tag">optional</span></legend>
-        ${datePicker({ name: 'date', value: null, time: false, max: Date.now(), optional: true, label: 'Date of the date', role: 'honey' })}
+        <legend class="label">${ICON.calendar}${t('whenWasIt')} <span class="opt-tag">${t('optional')}</span></legend>
+        ${datePicker({ name: 'date', value: null, time: false, max: Date.now(), optional: true, label: t('dateOfDate'), role: 'honey' })}
       </fieldset>
       <div class="sheet-actions">
-        <button class="btn primary block">Add to the memory book</button>
+        <button class="btn primary block">${t('addToBook')}</button>
       </div>
     </form>`, { className: 'wide honey', onMount: (el) => { wireTextarea(el, { focus: false }); wireDatePickers(el); } });
 }
@@ -826,75 +855,110 @@ function openFillSheet(letter) {
 function openStartOverSheet() {
   openSheet(`
     <form class="sheet-body" data-form="start-over">
-      <h2 class="h-md">Start a new alphabet?</h2>
-      <p class="muted">All 26 letters go back in the bag. Your current memory book will be cleared — save the recap image first if you want to keep it.</p>
+      <h2 class="h-md">${t('startOverQ')}</h2>
+      <p class="muted">${t('startOverLede')}</p>
       ${optionsPanel({ draw: drawMode(state.data) })}
       <div class="row end">
-        <button type="button" class="btn ghost" data-action="close-sheet">Cancel</button>
-        <button class="btn danger">Start over</button>
+        <button type="button" class="btn ghost" data-action="close-sheet">${t('cancel')}</button>
+        <button class="btn danger">${t('startOver')}</button>
       </div>
     </form>`);
 }
 
-async function openSettings() {
+/** Language + light/dark — available everywhere, also before joining a series. */
+function prefsBlock() {
+  return `
+    <div class="set-block prefs">
+      ${LANGS.length > 1 ? `
+      <fieldset class="opt">
+        <legend class="label">${t('language')}</legend>
+        ${segmented('pref-lang', LANGS.map((l) => ({ value: l.code, label: l.label })), getLang())}
+      </fieldset>` : ''}
+      <fieldset class="opt">
+        <legend class="label">${t('appearance')}</legend>
+        ${segmented('pref-theme', [
+          { value: 'system', label: t('themeSystem'), icon: ICON.auto },
+          { value: 'light', label: t('themeLight'), icon: ICON.sun },
+          { value: 'dark', label: t('themeDark'), icon: ICON.moon },
+        ], getTheme())}
+      </fieldset>
+    </div>`;
+}
+
+async function openSettings({ inPlace = false } = {}) {
   const d = state.data;
+  const inSeries = d && state.role && state.id;
+  const title = `<h2 class="h-md">${t('settings')}</h2>`;
+  if (!inSeries) {
+    openSheet(`<div class="sheet-body left">${title}${prefsBlock()}</div>`, { className: 'wide', inPlace });
+    return;
+  }
+
+  let keys = state.keys?.id === state.id ? state.keys.keys : null;
+  if (!keys) {
+    openSheet(`<div class="sheet-body left">${title}${prefsBlock()}<div class="loader sm"><i></i><i></i><i></i></div></div>`, { className: 'wide', inPlace });
+    keys = await getKeys(state.id);
+    state.keys = { id: state.id, keys };
+    if (!sheet.open) return;
+    inPlace = true;
+  }
   const myRole = state.role;
   const pRole = otherRole(myRole);
-  openSheet(`<div class="sheet-body"><h2 class="h-md">Settings</h2><div class="loader sm"><i></i><i></i><i></i></div></div>`, { className: 'wide' });
-  const keys = await getKeys(state.id);
-  if (!sheet.open) return;
   const myKey = keys[myRole];
   const pKey = keys[pRole];
+  const myName = esc(me().name);
+  const pName = partner() ? esc(partner().name) : '';
   openSheet(`
     <div class="sheet-body left">
-      <h2 class="h-md">Settings</h2>
+      ${title}
+      ${prefsBlock()}
 
       <form class="set-block" data-form="rename">
-        <label class="label" for="rename"><span class="dot ${myRole}"></span>Your name</label>
+        <label class="label" for="rename"><span class="dot ${myRole}"></span>${t('yourName')}</label>
         <div class="row">
-          <input id="rename" name="name" class="input" maxlength="${MAX_NAME}" value="${esc(me().name)}" required>
-          <button class="btn soft">Save</button>
+          <input id="rename" name="name" class="input" maxlength="${MAX_NAME}" value="${myName}" required>
+          <button class="btn soft">${t('save')}</button>
         </div>
       </form>
 
       ${myKey ? `
-      <div class="set-block">
-        <h3 class="h-xs">Your other devices</h3>
-        <p class="muted">Open this on your phone, laptop or tablet to play as <b>${esc(me().name)}</b> there too. It signs in as you — keep it to yourself.</p>
-        ${linkBox(personalUrl(state.id, myKey), { shareTitle: 'My ABC Dates link' })}
-        <p class="fine">Or type this code on the start page: <code class="code-pill">${formatCode(state.id, myKey)}</code></p>
+      <div class="set-block devices">
+        <h3 class="h-xs">${t('otherDevices')}</h3>
+        <p class="muted">${t('otherDevicesLede', myName)}</p>
+        ${linkBox(personalUrl(state.id, myKey), { shareTitle: t('myLinkTitle') })}
+        <p class="fine">${t('orTypeCode')} <code class="code-pill">${formatCode(state.id, myKey)}</code></p>
       </div>` : ''}
 
       ${partner() && pKey ? `
-      <div class="set-block">
-        <h3 class="h-xs">${esc(partner().name)} lost access?</h3>
-        <p class="muted">New phone or cleared browser? Send ${esc(partner().name)} their personal link to get back in.</p>
-        ${linkBox(personalUrl(state.id, pKey), { label: `Copy ${partner().name}’s link`, shareTitle: 'Your ABC Dates link' })}
+      <div class="set-block lost">
+        <h3 class="h-xs">${t('lostAccess', pName)}</h3>
+        <p class="muted">${t('lostAccessLede', pName)}</p>
+        ${linkBox(personalUrl(state.id, pKey), { label: t('copyTheirLink', pName), shareTitle: t('yourLinkTitle') })}
       </div>` : ''}
 
       ${partner() ? `
-      <div class="set-block">
-        <h3 class="h-xs">Not ${esc(me().name)}?</h3>
-        <p class="muted">Switch this device to the other player with their personal code.</p>
+      <div class="set-block switch">
+        <h3 class="h-xs">${t('notMe', myName)}</h3>
+        <p class="muted">${t('switchLede')}</p>
         ${codeForm({ id: state.id })}
       </div>` : ''}
 
       ${d.status !== 'WAITING' ? `
       <div class="set-block danger">
-        <h3 class="h-xs">Start over</h3>
-        <p class="muted">Clears all 26 letters and starts a fresh alphabet for both of you.</p>
-        <button class="btn ghost danger" data-action="start-over">Start a new alphabet</button>
+        <h3 class="h-xs">${t('startOver')}</h3>
+        <p class="muted">${t('startOverSettingsLede')}</p>
+        <button class="btn ghost danger" data-action="start-over">${t('newAlphabet')}</button>
       </div>` : ''}
 
-      <p class="fine">Space code <code class="code-pill">${state.id}</code> · Letters: ${drawMode(d) === 'manual' ? 'picked by you' : 'random draw'}</p>
-    </div>`, { className: 'wide' });
+      <p class="fine">${t('spaceCode')} <code class="code-pill">${state.id}</code> · ${t('lettersMode', drawMode(d) === 'manual')}</p>
+    </div>`, { className: 'wide', inPlace });
 }
 
 /* ---------------------------------------------------- realtime + reveals */
 
 function onSeries(d) {
   if (!d) {
-    renderLocked(state.id, 'This series doesn’t exist anymore.');
+    renderLocked(state.id, t('seriesGone'));
     return;
   }
   const role = roleOf(d, state.uid);
@@ -931,12 +995,12 @@ function showNews(d) {
       events.push({
         at: x.completedAt,
         html: x.retro
-          ? `<span class="badge sm honey">${l}</span><span><b>${pName}</b> filled in ${l}: “${esc(x.description)}”</span>`
-          : `<span class="badge sm ${pRole}">${l}</span><span><b>${pName}</b> logged their ${l} date: “${esc(x.description)}”</span>`,
+          ? `<span class="badge sm honey">${l}</span><span>${t('newsFilled', pName, l, esc(x.description))}</span>`
+          : `<span class="badge sm ${pRole}">${l}</span><span>${t('newsLogged', pName, l, esc(x.description))}</span>`,
         letter: l,
       });
     } else if (x.status === 'ACTIVE' && x.assignedTo === pRole && drawMode(d) === 'manual' && x.drawnAt > since) {
-      events.push({ at: x.drawnAt, html: `<span class="badge sm ${pRole}">${l}</span><span><b>${pName}</b> picked ${l} for this round.</span>` });
+      events.push({ at: x.drawnAt, html: `<span class="badge sm ${pRole}">${l}</span><span>${t('newsPicked', pName, l)}</span>` });
     }
   }
   if (!events.length) return;
@@ -958,7 +1022,7 @@ async function maybeReveal(d) {
 
   // Manual mode has nothing to reveal — just nudge.
   if (drawMode(d) === 'manual') {
-    if (needsPick(d, state.role)) toast(roundInCycle(d) === 1 ? 'Time to pick your first letter ♡' : `Round ${roundInCycle(d)} — time to pick your next letter.`);
+    if (needsPick(d, state.role)) toast(roundInCycle(d) === 1 ? t('nudgeFirst') : t('nudgeNext', roundInCycle(d)));
     markRoundSeen(state.id, state.role, d.round).catch(() => {});
     return;
   }
@@ -971,13 +1035,13 @@ async function maybeReveal(d) {
   const first = roundInCycle(d) === 1;
 
   await playReveal({
-    title: first ? (d.cycle > 1 ? 'A fresh alphabet' : 'Let the games begin') : `Round ${roundInCycle(d)} of ${totalRounds(d)}`,
-    subtitle: first ? (letters.length > 1 ? 'Your first letters are…' : 'Your first letter is…') : 'Fresh letters, new plans.',
+    title: first ? (d.cycle > 1 ? t('revealFresh') : t('revealBegin')) : t('roundOf', roundInCycle(d), totalRounds(d)),
+    subtitle: first ? (letters.length > 1 ? t('revealFirstMany') : t('revealFirstOne')) : t('revealFreshLetters'),
     pool,
     cards: letters.map((l) => ({
       letter: l,
       role: d.letters[l].assignedTo,
-      name: d.players[d.letters[l].assignedTo].name,
+      name: esc(d.players[d.letters[l].assignedTo].name),
       mine: d.letters[l].assignedTo === state.role,
       done: d.letters[l].status === 'DONE',
     })),
@@ -1041,7 +1105,7 @@ async function openSeries(id, key) {
   let role = roleOf(data, state.uid);
   if (!role && key) {
     role = await claimRole(id, key, state.uid);
-    toast(role ? 'This device is connected ♡' : 'That code didn’t match this series.', { tone: role ? '' : 'error' });
+    toast(role ? t('deviceConnected') : t('codeNoMatch'), { tone: role ? '' : 'error' });
   }
   if (location.hash) history.replaceState(null, '', `/s/${id}`); // don't leave the key lying around
 
@@ -1089,7 +1153,7 @@ document.addEventListener('click', async (e) => {
         const span = el.querySelector('span');
         const before = span?.textContent;
         el.classList.add('ok');
-        if (span) span.textContent = 'Copied!';
+        if (span) span.textContent = t('copied');
         setTimeout(() => {
           el.classList.remove('ok');
           if (span && before) span.textContent = before;
@@ -1138,7 +1202,7 @@ document.addEventListener('click', async (e) => {
       try {
         await setPlan(state.id, letter, { plannedAt: null }, state.role);
         closeSheet();
-        toast('Date removed');
+        toast(t('dateRemoved'));
       } catch (err) {
         fail(err);
       }
@@ -1162,7 +1226,7 @@ document.addEventListener('click', async (e) => {
       }
       else if (x.status === 'ACTIVE') {
         if (x.plannedAt) openCalendarSheet(letter);
-        else toast(`${letter} is ${esc(partner().name)}’s letter this round.`);
+        else toast(t('theirLetterThisRound', letter, esc(partner().name)));
       }
       break;
     }
@@ -1170,7 +1234,7 @@ document.addEventListener('click', async (e) => {
       openStartOverSheet();
       break;
     case 'export-text':
-      if (await copyText(exportText(d))) toast('Recap copied to clipboard');
+      if (await copyText(exportText(d))) toast(t('recapCopied'));
       break;
     case 'export-png':
       await busy(el, async () => {
@@ -1183,14 +1247,26 @@ document.addEventListener('click', async (e) => {
   }
 });
 
-// Live summary + limits for the "Options" panel.
 document.addEventListener('change', (e) => {
+  // Settings: appearance applies instantly; language re-renders the page and the sheet in place.
+  if (e.target.name === 'pref-theme') {
+    setTheme(e.target.value);
+    return;
+  }
+  if (e.target.name === 'pref-lang') {
+    setLang(e.target.value);
+    state.redraw?.();
+    openSettings({ inPlace: true });
+    return;
+  }
+
+  // Live summary + limits for the "Options" panel.
   const panel = e.target.closest('.options');
   if (!panel) return;
   const checked = panel.querySelectorAll('input[name="pre"]:checked');
   if (e.target.name === 'pre' && 26 - checked.length < MIN_OPEN) {
     e.target.checked = false;
-    toast('Leave at least one letter to play for ♡');
+    toast(t('leaveOne'));
   }
   const draw = panel.querySelector('input[name="draw"]:checked')?.value;
   const preCount = panel.querySelectorAll('input[name="pre"]:checked').length;
@@ -1205,7 +1281,7 @@ document.addEventListener('submit', async (e) => {
   if (!form) return;
   e.preventDefault();
   if (!navigator.onLine) {
-    toast('You seem to be offline — try again once you’re connected.', { tone: 'error' });
+    toast(t('offline'), { tone: 'error' });
     return;
   }
   const button = e.submitter || form.querySelector('button:not([type="button"])');
@@ -1236,7 +1312,7 @@ document.addEventListener('submit', async (e) => {
         await openSeries(state.id, null);
       } catch (err) {
         fail(err);
-        if (err?.message?.includes('already joined')) renderLocked(state.id);
+        if (err?.code === 'errJoined') renderLocked(state.id);
       }
     });
   }
@@ -1244,7 +1320,7 @@ document.addEventListener('submit', async (e) => {
   if (kind === 'code') {
     const parsed = parseCode(form.code.value);
     if (!parsed) {
-      toast(`Codes look like ${'X'.repeat(SPACE_LEN)}-XXXXX.`, { tone: 'error' });
+      toast(t('codesLookLike', `${'X'.repeat(SPACE_LEN)}-XXXXX`), { tone: 'error' });
       return;
     }
     const switching = state.data && state.id === parsed.id && state.role;
@@ -1253,8 +1329,8 @@ document.addEventListener('submit', async (e) => {
         const role = await claimRole(parsed.id, parsed.key, state.uid, state.role);
         if (role) {
           closeSheet();
-          toast(`This device now plays as ${esc(state.data.players[role].name)}.`);
-        } else toast('That code didn’t work.', { tone: 'error' });
+          toast(t('nowPlaysAs', esc(state.data.players[role].name)));
+        } else toast(t('codeDidntWork'), { tone: 'error' });
       });
     } else {
       navigate(`/s/${parsed.id}#k=${parsed.key}`);
@@ -1269,13 +1345,13 @@ document.addEventListener('submit', async (e) => {
       if (form.dataset.edit) {
         await editDescription(state.id, letter, desc);
         closeSheet();
-        toast('Saved');
+        toast(t('saved'));
       } else {
         const res = await completeLetter(state.id, letter, desc, state.role);
         closeSheet();
         const card = document.querySelector(`.round-card[data-letter="${letter}"], .tile[data-letter="${letter}"]`);
         sparkle(card, 18);
-        if (!res.drew.length && !res.completed) toast(`${letter} is in the book ♡`);
+        if (!res.drew.length && !res.completed) toast(t('inTheBook', letter));
       }
     });
   }
@@ -1291,7 +1367,7 @@ document.addEventListener('submit', async (e) => {
         card?.classList.add('arrive');
         sparkle(card, 18);
       }, 250);
-      toast(`${letter} is yours. Time to plan something ♡`);
+      toast(t('yoursNow', letter));
     });
   }
 
@@ -1299,7 +1375,7 @@ document.addEventListener('submit', async (e) => {
     const letter = form.dataset.letter;
     const plannedAt = new Date(form.when.value).getTime();
     if (!Number.isFinite(plannedAt)) {
-      toast('Pick a date and time first.', { tone: 'error' });
+      toast(t('pickDateFirst'), { tone: 'error' });
       return;
     }
     const where = form.where.value.replace(/\s+/g, ' ').trim().slice(0, MAX_LOCATION);
@@ -1319,7 +1395,7 @@ document.addEventListener('submit', async (e) => {
     await run(async () => {
       await fillPredone(state.id, letter, { description: desc, dateAt, plannedBy }, state.role);
       closeSheet();
-      toast(`${letter} is in the memory book ♡`);
+      toast(t('inMemoryBook', letter));
     });
   }
 
@@ -1336,7 +1412,7 @@ document.addEventListener('submit', async (e) => {
     if (!name) return;
     await run(async () => {
       await renamePlayer(state.id, state.role, name);
-      toast('Name updated');
+      toast(t('nameUpdated'));
     });
   }
 });
@@ -1377,18 +1453,19 @@ window.addEventListener('pageshow', (e) => e.persisted && reconnect());
 /* -------------------------------------------------------------------- boot */
 
 (async () => {
-  renderLoading('Warming up…');
+  renderLoading(t('warmingUp'));
   try {
     const user = await ensureUser();
     state.uid = user.uid;
     route();
   } catch (err) {
     console.error(err);
+    state.redraw = null;
     mount('error', `
       <main class="screen center narrow">
-        <h1 class="h-md">Couldn’t connect.</h1>
-        <p class="muted">Check your connection and reload. (If you’re the developer: make sure Anonymous sign-in is enabled in Firebase Auth.)</p>
-        <button class="btn primary" onclick="location.reload()">Reload</button>
+        <h1 class="h-md">${t('cantConnect')}</h1>
+        <p class="muted">${t('cantConnectLede')}</p>
+        <button class="btn primary" onclick="location.reload()">${t('reload')}</button>
       </main>`);
   }
 })();

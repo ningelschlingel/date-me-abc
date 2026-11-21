@@ -5,6 +5,8 @@
  * An empty value means "no date" (only possible with `optional`).
  */
 
+import { locale, t } from './i18n.js';
+
 const DAY = 864e5;
 const pad = (n) => String(n).padStart(2, '0');
 const startOfDay = (ms) => new Date(new Date(ms).setHours(0, 0, 0, 0)).getTime();
@@ -21,7 +23,7 @@ const ICON = {
 /** First day of the week for the user's locale (0 = Sunday … 6 = Saturday). */
 function weekStart() {
   try {
-    const loc = new Intl.Locale(navigator.language);
+    const loc = new Intl.Locale(locale());
     const info = loc.getWeekInfo?.() ?? loc.weekInfo;
     if (info?.firstDay) return info.firstDay % 7;
   } catch { /* old browser */ }
@@ -35,19 +37,19 @@ function toValue(ms, time) {
   return time ? `${date}T${pad(d.getHours())}:${pad(d.getMinutes())}` : date;
 }
 
-const fmt = (ms, opts) => new Date(ms).toLocaleDateString(undefined, opts);
-const fmtTime = (h, m) => new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+const fmt = (ms, opts) => new Date(ms).toLocaleDateString(locale(), opts);
+const fmtTime = (h, m) => new Date(2000, 0, 1, h, m).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
 
 function relative(ms) {
   const days = Math.round((startOfDay(ms) - startOfDay(Date.now())) / DAY);
-  if (days === 0) return 'today';
-  if (days === 1) return 'tomorrow';
-  if (days === -1) return 'yesterday';
-  if (days > 1 && days < 7) return `in ${days} days`;
-  if (days >= 7 && days < 14) return 'next week';
-  if (days >= 14 && days < 60) return `in ${Math.round(days / 7)} weeks`;
-  if (days < -1 && days > -14) return `${-days} days ago`;
-  if (days <= -14 && days > -60) return `${Math.round(-days / 7)} weeks ago`;
+  if (days === 0) return t('relToday');
+  if (days === 1) return t('relTomorrow');
+  if (days === -1) return t('relYesterday');
+  if (days > 1 && days < 7) return t('relInDays', days);
+  if (days >= 7 && days < 14) return t('relNextWeek');
+  if (days >= 14 && days < 60) return t('relInWeeks', Math.round(days / 7));
+  if (days < -1 && days > -14) return t('relDaysAgo', -days);
+  if (days <= -14 && days > -60) return t('relWeeksAgo', Math.round(-days / 7));
   return '';
 }
 
@@ -72,27 +74,27 @@ export function datePicker({ name, value = null, time = true, min = null, max = 
       <div class="dp-main">
         <div class="dp-cal">
           <div class="dp-head">
-            <button type="button" class="dp-nav" data-dp="prev" aria-label="Previous month">${ICON.prev}</button>
-            <button type="button" class="dp-title" data-dp="mode" aria-label="Choose month and year"></button>
-            <button type="button" class="dp-nav" data-dp="next" aria-label="Next month">${ICON.next}</button>
+            <button type="button" class="dp-nav" data-dp="prev" aria-label="${t('dpPrevMonth')}">${ICON.prev}</button>
+            <button type="button" class="dp-title" data-dp="mode" aria-label="${t('dpChooseMonth')}"></button>
+            <button type="button" class="dp-nav" data-dp="next" aria-label="${t('dpNextMonth')}">${ICON.next}</button>
           </div>
           <div class="dp-body"></div>
         </div>
         ${time ? `
         <div class="dp-time">
-          <p class="dp-time-label">Time</p>
+          <p class="dp-time-label">${t('dpTime')}</p>
           <div class="dp-times" role="list"></div>
           <div class="dp-steppers">
             <div class="dp-step" data-unit="h">
-              <button type="button" class="dp-step-btn" data-dp="h-" aria-label="Earlier hour">${ICON.minus}</button>
+              <button type="button" class="dp-step-btn" data-dp="h-" aria-label="${t('dpEarlierHour')}">${ICON.minus}</button>
               <output class="dp-step-val" data-out="h"></output>
-              <button type="button" class="dp-step-btn" data-dp="h+" aria-label="Later hour">${ICON.plus}</button>
+              <button type="button" class="dp-step-btn" data-dp="h+" aria-label="${t('dpLaterHour')}">${ICON.plus}</button>
             </div>
             <span class="dp-colon" aria-hidden="true">:</span>
             <div class="dp-step" data-unit="m">
-              <button type="button" class="dp-step-btn" data-dp="m-" aria-label="15 minutes earlier">${ICON.minus}</button>
+              <button type="button" class="dp-step-btn" data-dp="m-" aria-label="${t('dpEarlier15')}">${ICON.minus}</button>
               <output class="dp-step-val" data-out="m"></output>
-              <button type="button" class="dp-step-btn" data-dp="m+" aria-label="15 minutes later">${ICON.plus}</button>
+              <button type="button" class="dp-step-btn" data-dp="m+" aria-label="${t('dpLater15')}">${ICON.plus}</button>
             </div>
           </div>
         </div>` : ''}
@@ -136,21 +138,21 @@ function wire(el) {
   function renderSummary() {
     const s = el.querySelector('.dp-summary');
     if (st.day == null) {
-      s.innerHTML = `<span class="dp-sum-date is-empty">${optional ? 'No date — that’s fine' : 'Pick a day'}</span>`;
+      s.innerHTML = `<span class="dp-sum-date is-empty">${optional ? t('dpNoDate') : t('dpPickDay')}</span>`;
       return;
     }
     const rel = relative(st.day);
     s.innerHTML = `
       <span class="dp-sum-date">${fmt(st.day, { weekday: 'long', day: 'numeric', month: 'long', ...(new Date(st.day).getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })}</span>
       <span class="dp-sum-meta">${time ? `<b>${fmtTime(st.h, st.m)}</b>` : ''}${rel ? `<span>${rel}</span>` : ''}
-        ${optional ? '<button type="button" class="dp-clear" data-dp="clear">Clear</button>' : ''}</span>`;
+        ${optional ? `<button type="button" class="dp-clear" data-dp="clear">${t('dpClear')}</button>` : ''}</span>`;
   }
 
   function quickDays() {
     const today = startOfDay(Date.now());
     const out = [];
-    if (new Date().getHours() < 20) out.push({ label: 'Tonight', day: today, h: 19, m: 0 });
-    out.push({ label: 'Tomorrow', day: today + DAY });
+    if (new Date().getHours() < 20) out.push({ label: t('dpTonight'), day: today, h: 19, m: 0 });
+    out.push({ label: t('dpTomorrow'), day: today + DAY });
     for (const dow of [5, 6, 0]) { // next Fri, Sat, Sun beyond tomorrow
       let d = today + 2 * DAY;
       while (new Date(d).getDay() !== dow) d += DAY;
@@ -223,8 +225,8 @@ function wire(el) {
 
   function render() {
     el.classList.toggle('months', st.mode === 'months');
-    el.querySelector('[data-dp="prev"]').setAttribute('aria-label', st.mode === 'months' ? 'Previous year' : 'Previous month');
-    el.querySelector('[data-dp="next"]').setAttribute('aria-label', st.mode === 'months' ? 'Next year' : 'Next month');
+    el.querySelector('[data-dp="prev"]').setAttribute('aria-label', t(st.mode === 'months' ? 'dpPrevYear' : 'dpPrevMonth'));
+    el.querySelector('[data-dp="next"]').setAttribute('aria-label', t(st.mode === 'months' ? 'dpNextYear' : 'dpNextMonth'));
     if (st.mode === 'months') renderMonths();
     else renderDays();
     renderSummary();

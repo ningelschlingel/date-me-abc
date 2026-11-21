@@ -1,4 +1,5 @@
 import { ALPHABET } from './game.js';
+import { t } from './i18n.js';
 
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,15 +51,15 @@ export function playReveal({ title, subtitle, cards, pool }) {
                 <div class="flip-face flip-back"><span>?</span></div>
                 <div class="flip-face flip-front">
                   <span class="reveal-letter">&nbsp;</span>
-                  ${c.done ? '<span class="reveal-done">done ✓</span>' : ''}
+                  ${c.done ? `<span class="reveal-done">${t('revealDone')}</span>` : ''}
                 </div>
               </div>
               <div class="reveal-owner">
-                <span class="dot ${c.role}"></span>${c.mine ? 'Yours' : c.name}
+                <span class="dot ${c.role}"></span>${c.mine ? t('revealYours') : c.name}
               </div>
             </div>`).join('')}
         </div>
-        <button class="btn primary reveal-go" type="button">Let’s go</button>
+        <button class="btn primary reveal-go" type="button">${t('letsGo')}</button>
       </div>`;
     document.body.appendChild(root);
     document.body.classList.add('no-scroll');
@@ -125,8 +126,13 @@ export function confetti({ duration = 2600, count = 140 } = {}) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const W = (canvas.width = innerWidth * dpr);
   const H = (canvas.height = innerHeight * dpr);
-  const css = getComputedStyle(document.documentElement);
-  const colors = ['--p1', '--p2', '--honey', '--ink'].map((v) => css.getPropertyValue(v).trim());
+  const probe = document.createElement('i');
+  document.body.appendChild(probe);
+  const colors = ['--p1', '--p2', '--honey', '--ink'].map((v) => {
+    probe.style.color = `var(${v})`;
+    return getComputedStyle(probe).color;
+  });
+  probe.remove();
   const parts = Array.from({ length: count }, () => ({
     x: W / 2 + (Math.random() - 0.5) * W * 0.3,
     y: H * 0.35,

@@ -5,8 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>ABC Dates</title>
     <meta name="description" content="Twenty-six letters, twenty-six dates. A little game for two." />
-    <meta name="theme-color" content="#F6F0E6" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#1B1820" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F6F0E6" />
+    <script>
+      // Apply the saved light/dark choice before first paint (src/theme.js takes over after).
+      (function () {
+        var pref = 'system';
+        try { pref = localStorage.getItem('abc-dates:theme') || 'system'; } catch (e) {}
+        var dark = pref === 'dark' || (pref !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.querySelector('meta[name="theme-color"]').content = dark ? '#1B1820' : '#F6F0E6';
+      })();
+    </script>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

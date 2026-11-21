@@ -2,6 +2,10 @@ import {
   arrayRemove, arrayUnion, doc, getDoc, onSnapshot, runTransaction, updateDoc, writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase.js';
+import { t } from './i18n.js';
+
+/** An Error with a translated message and a stable code callers can check. */
+const gameError = (code, ...args) => Object.assign(new Error(t(code, ...args)), { code });
 
 export const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 export const MAX_DESC = 80;
@@ -118,7 +122,7 @@ function freshLetters(premarked = []) {
 
 function cleanOptions({ draw = 'random', premarked = [] } = {}) {
   const pre = [...new Set(premarked)].filter((l) => ALPHABET.includes(l));
-  if (26 - pre.length < MIN_OPEN) throw new Error('Leave at least one letter open to play.');
+  if (26 - pre.length < MIN_OPEN) throw gameError('errLeaveOne');
   return { draw: draw === 'manual' ? 'manual' : 'random', premarked: pre };
 }
 
@@ -193,10 +197,10 @@ export async function peekSeries(id) {
 export async function joinSeries(id, name, uid) {
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(seriesRef(id));
-    if (!snap.exists()) throw new Error('This space no longer exists.');
+    if (!snap.exists()) throw gameError('errGone');
     const data = snap.data();
-    if (data.status !== 'WAITING' || data.players.p2) throw new Error('Someone already joined this space.');
-    if (data.players.p1.uids.includes(uid)) throw new Error('You created this space — send the link to your partner instead.');
+    if (data.status !== 'WAITING' || data.players.p2) throw gameError('errJoined');
+    if (data.players.p1.uids.includes(uid)) throw gameError('errOwn');
 
     const letters = structuredClone(data.letters);
     const round = (data.round || 0) + 1;
@@ -280,8 +284,8 @@ export async function pickLetter(id, letter, role) {
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(seriesRef(id));
     const data = snap.data();
-    if (data.letters[letter].status !== 'UNUSED') throw new Error(`${letter} was just taken — pick another one.`);
-    if (!needsPick(data, role)) throw new Error('You already have a letter this round.');
+    if (data.letters[letter].status !== 'UNUSED') throw gameError('errTaken', letter);
+    if (!needsPick(data, role)) throw gameError('errHaveLetter');
     tx.update(seriesRef(id), {
       [`letters.${letter}`]: { status: 'ACTIVE', assignedTo: role, description: '', round: data.round, drawnAt: Date.now() },
       updatedAt: Date.now(),
@@ -300,7 +304,7 @@ export async function completeLetter(id, letter, description, role) {
     const data = snap.data();
     const current = data.letters[letter];
     if (current.status !== 'ACTIVE' || current.assignedTo !== role) {
-      throw new Error('That letter isn’t yours to log anymore.');
+      throw gameError('errNotYours');
     }
     const now = Date.now();
     const letters = structuredClone(data.letters);
@@ -321,7 +325,7 @@ export async function fillPredone(id, letter, { description, dateAt, plannedBy }
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(seriesRef(id));
     const x = snap.data().letters[letter];
-    if (x.status !== 'PREDONE') throw new Error('That letter was already filled in.');
+    if (x.status !== 'PREDONE') throw gameError('errFilled');
     const now = Date.now();
     tx.update(seriesRef(id), {
       [`letters.${letter}`]: {
