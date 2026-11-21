@@ -153,7 +153,7 @@ const ICON = {
   hand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5v-2a1.5 1.5 0 0 1 3 0V12M14 10.5a1.5 1.5 0 0 1 3 0V12M17 11a1.5 1.5 0 0 1 3 0v3a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L4.3 15a1.6 1.6 0 0 1 2.6-1.8L8 14.5"/></svg>',
 };
 
-const mark = () => '<span class="mark" aria-hidden="true"><i>a</i><i>b</i><i>c</i></span>';
+const mark = (sm = false) => `<span class="mark${sm ? ' sm' : ''}" aria-hidden="true"><i>a</i><i>b</i><i>c</i></span>`;
 
 function header({ settings = true } = {}) {
   const d = state.data;
@@ -221,6 +221,12 @@ function optionsPanel({ draw = 'random' } = {}) {
   return `
     <details class="options">
       <summary>${ICON.sliders}<span>Options</span><span class="options-hint">${optionsSummary(draw, 0)}</span>${ICON.chevron}</summary>
+      ${optionsBody(draw)}
+    </details>`;
+}
+
+function optionsBody(draw = 'random') {
+  return `
       <div class="options-body">
         <fieldset class="opt">
           <legend class="label">How do you get your letters?</legend>
@@ -236,8 +242,7 @@ function optionsPanel({ draw = 'random' } = {}) {
             ${ALPHABET.map((l) => `<label class="pre"><input type="checkbox" name="pre" value="${l}"><span>${l}</span></label>`).join('')}
           </div>
         </fieldset>
-      </div>
-    </details>`;
+      </div>`;
 }
 
 function readOptions(form) {
@@ -286,7 +291,7 @@ function renderLanding() {
         <section class="resume">
           ${spaces.map((s) => `
             <a class="resume-card" href="/s/${esc(s.id)}" data-link>
-              <span class="mark sm" aria-hidden="true"><i>a</i><i>b</i><i>c</i></span>
+              ${mark(true)}
               <span class="resume-text"><b>${esc(s.me)}${s.partner ? ` &amp; ${esc(s.partner)}` : ''}</b><small>Continue your series</small></span>
               ${ICON.arrow}
             </a>`).join('')}
@@ -294,17 +299,23 @@ function renderLanding() {
 
       <form class="card create" data-form="create">
         <label class="label" for="name">Your name</label>
-        <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="e.g. Alex" autocomplete="given-name" required>
-        ${optionsPanel()}
-        <button class="btn primary block">Start a series ${ICON.arrow}</button>
-        <p class="fine">You’ll get a link to send to your partner.</p>
+        <div class="create-row">
+          <input id="name" name="name" class="input" maxlength="${MAX_NAME}" placeholder="e.g. Alex" autocomplete="given-name" required>
+          <button type="button" class="btn soft icon-only opt-toggle" data-action="toggle" aria-controls="create-options" aria-expanded="false" aria-label="Options" title="Options">${ICON.sliders}<i class="opt-badge" hidden></i></button>
+          <button class="btn primary">Start ${ICON.arrow}</button>
+        </div>
+        <div class="options create-options" id="create-options" hidden>${optionsBody()}</div>
       </form>
 
-      <details class="have-code">
-        <summary>Already playing on another device?</summary>
+      <p class="create-foot">
+        <span>You’ll get a link to share</span>
+        <span class="sep" aria-hidden="true"></span>
+        <button type="button" class="link-btn" data-action="toggle" aria-controls="have-code" aria-expanded="false" data-focus="#code-input">On another device?</button>
+      </p>
+      <div class="have-code" id="have-code" hidden>
         <p class="muted">Enter the personal code from <b>Settings → Your other devices</b> on your first device.</p>
         ${codeForm()}
-      </details>
+      </div>
 
       <section class="how">
         <div class="how-step"><span class="how-num">1</span><h3>Invite</h3><p>Start a series and send the link to your person.</p></div>
@@ -595,9 +606,9 @@ function renderCompleted(prev) {
 function openSheet(html, { onMount, className = '' } = {}) {
   sheet.className = `sheet ${className}`;
   sheet.innerHTML = `
-    <div class="sheet-card" tabindex="-1" autofocus>
+    <div class="sheet-card">
       <button class="icon-btn sheet-close" data-action="close-sheet" aria-label="Close">${ICON.close}</button>
-      ${html}
+      <div class="sheet-scroll" tabindex="-1" autofocus>${html}</div>
     </div>`;
   if (!sheet.open) sheet.showModal();
   onMount?.(sheet);
@@ -662,7 +673,7 @@ function openLogSheet(letter, { edit = false } = {}) {
           ${IDEAS[letter].map((i) => `<button type="button" class="chip" data-action="idea" data-value="${esc(i)}">${esc(i)}</button>`).join('')}
         </div>`}
       <button class="btn primary block">${edit ? 'Save changes' : `Save our ${letter} date`}</button>
-    </form>`, { onMount: (el) => wireTextarea(el) });
+    </form>`, { className: x.assignedTo, onMount: (el) => wireTextarea(el) });
 }
 
 function openDetailSheet(letter) {
@@ -676,7 +687,7 @@ function openDetailSheet(letter) {
       <p class="quote">“${esc(x.description)}”</p>
       ${x.location ? `<p class="muted where">${ICON.pin}<span>${esc(x.location)}</span></p>` : ''}
       ${canEdit ? `<button class="btn soft block" data-action="edit" data-letter="${letter}">${ICON.edit}<span>Edit description</span></button>` : ''}
-    </div>`);
+    </div>`, { className: x.assignedTo });
 }
 
 /** Manual mode: choose your letter for this round. */
@@ -695,6 +706,7 @@ function openPickSheet(preselect = null) {
       <p class="fine pick-ideas">${sel ? `Ideas: ${IDEAS[sel].map(esc).join(' · ')}` : '&nbsp;'}</p>
       <button class="btn primary block" ${sel ? '' : 'disabled'}>${sel ? `Take ${sel}` : 'Choose a letter'}</button>
     </form>`, {
+    className: state.role,
     onMount: (el) => {
       const btn = el.querySelector('button.btn.primary');
       const ideas = el.querySelector('.pick-ideas');
@@ -729,7 +741,7 @@ function openPlanSheet(letter) {
         ${x.plannedAt ? `<button type="button" class="btn ghost" data-action="clear-plan" data-letter="${letter}">Remove</button>` : ''}
         <button class="btn primary">${ICON.check}<span>Save the date</span></button>
       </div>
-    </form>`, { className: 'wide', onMount: wireDatePickers });
+    </form>`, { className: `wide ${x.assignedTo}`, onMount: wireDatePickers });
 }
 
 function calEvent(letter) {
@@ -769,7 +781,7 @@ function openCalendarSheet(letter, { proactive = false, justSaved = false } = {}
         ${mine && x.status === 'ACTIVE' ? `<button class="btn ghost sm" data-action="plan" data-letter="${letter}">${ICON.edit}<span>Change</span></button>` : ''}
         <button class="btn ghost sm" data-action="close-sheet">${proactive || justSaved ? 'Not now' : 'Close'}</button>
       </div>
-    </div>`);
+    </div>`, { className: x.assignedTo });
 }
 
 function openHappenedSheet(letter) {
@@ -781,7 +793,7 @@ function openHappenedSheet(letter) {
       <p class="muted">It was planned for ${esc(fmtWhen(x.plannedAt))}${x.location ? ` at ${esc(x.location)}` : ''}.</p>
       <button class="btn primary block" data-action="log" data-letter="${letter}">${ICON.check}<span>Yes — let’s log it</span></button>
       <button class="btn soft block" data-action="plan" data-letter="${letter}">${ICON.calendar}<span>Not yet — set a new time</span></button>
-    </div>`);
+    </div>`, { className: x.assignedTo });
 }
 
 /** Fill in a letter that was marked "already done" when the series started. */
@@ -808,7 +820,7 @@ function openFillSheet(letter) {
       <div class="sheet-actions">
         <button class="btn primary block">Add to the memory book</button>
       </div>
-    </form>`, { className: 'wide', onMount: (el) => { wireTextarea(el, { focus: false }); wireDatePickers(el); } });
+    </form>`, { className: 'wide honey', onMount: (el) => { wireTextarea(el, { focus: false }); wireDatePickers(el); } });
 }
 
 function openStartOverSheet() {
@@ -1093,6 +1105,15 @@ document.addEventListener('click', async (e) => {
     case 'close-sheet':
       closeSheet();
       break;
+    case 'toggle': {
+      const target = document.getElementById(el.getAttribute('aria-controls'));
+      if (!target) break;
+      const open = target.hidden;
+      target.hidden = !open;
+      el.setAttribute('aria-expanded', String(open));
+      if (open && el.dataset.focus) target.querySelector(el.dataset.focus)?.focus();
+      break;
+    }
     case 'log':
       openLogSheet(letter);
       break;
@@ -1164,7 +1185,7 @@ document.addEventListener('click', async (e) => {
 
 // Live summary + limits for the "Options" panel.
 document.addEventListener('change', (e) => {
-  const panel = e.target.closest('details.options');
+  const panel = e.target.closest('.options');
   if (!panel) return;
   const checked = panel.querySelectorAll('input[name="pre"]:checked');
   if (e.target.name === 'pre' && 26 - checked.length < MIN_OPEN) {
@@ -1172,8 +1193,11 @@ document.addEventListener('change', (e) => {
     toast('Leave at least one letter to play for ♡');
   }
   const draw = panel.querySelector('input[name="draw"]:checked')?.value;
-  panel.querySelector('.options-hint').textContent =
-    optionsSummary(draw, panel.querySelectorAll('input[name="pre"]:checked').length);
+  const preCount = panel.querySelectorAll('input[name="pre"]:checked').length;
+  const hint = panel.querySelector('.options-hint');
+  if (hint) hint.textContent = optionsSummary(draw, preCount);
+  const badge = panel.closest('form')?.querySelector('.opt-badge');
+  if (badge) badge.hidden = draw !== 'manual' && !preCount;
 });
 
 document.addEventListener('submit', async (e) => {
