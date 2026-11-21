@@ -1,5 +1,7 @@
 import { ALPHABET } from './game.js';
 
+const dateOf = (x) => x.dateAt ?? x.completedAt;
+
 const fmtDate = (ms) =>
   ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
@@ -7,9 +9,10 @@ export function exportText(data) {
   const { p1, p2 } = data.players;
   const lines = ALPHABET.map((l) => {
     const x = data.letters[l];
+    if (x.status === 'PREDONE') return `${l} — (done before we started)`;
     if (x.status !== 'DONE') return `${l} — …`;
     const who = data.players[x.assignedTo]?.name;
-    return `${l} — ${x.description}  (${who}, ${fmtDate(x.completedAt)})`;
+    return `${l} — ${x.description}  (${who}, ${fmtDate(dateOf(x))})`;
   });
   return [`ABC Dates · ${p1.name} & ${p2?.name ?? ''}`, '', ...lines, '', 'A to Z, together. ♡'].join('\n');
 }
@@ -81,8 +84,9 @@ export async function renderRecapPNG(data) {
   const rows = ALPHABET.map((l) => {
     const x = data.letters[l];
     const done = x.status === 'DONE';
-    const lines = done ? wrap(measure, x.description || '—', TEXT_W, 2) : ['—'];
-    return { l, x, done, lines, h: 34 + lines.length * 38 + 30 };
+    const pre = x.status === 'PREDONE';
+    const lines = done ? wrap(measure, x.description || '—', TEXT_W, 2) : [pre ? 'Done before we started' : '—'];
+    return { l, x, done, pre, lines, h: 34 + lines.length * 38 + 30 };
   });
   const HEADER = 300;
   const FOOTER = 130;
@@ -109,8 +113,8 @@ export async function renderRecapPNG(data) {
   ctx.fillText(names, W / 2, 190);
   ctx.font = 'italic 400 30px Fraunces';
   ctx.fillStyle = C.soft;
-  const first = Math.min(...rows.filter((r) => r.done).map((r) => r.x.completedAt));
-  const last = Math.max(...rows.filter((r) => r.done).map((r) => r.x.completedAt));
+  const first = Math.min(...rows.filter((r) => r.done).map((r) => dateOf(r.x)));
+  const last = Math.max(...rows.filter((r) => r.done).map((r) => dateOf(r.x)));
   ctx.fillText(
     Number.isFinite(first) ? `${fmtDate(first)} – ${fmtDate(last)}` : 'from A to Z',
     W / 2,
@@ -125,13 +129,13 @@ export async function renderRecapPNG(data) {
   let y = HEADER + 20;
   ctx.textAlign = 'left';
   rows.forEach((r, i) => {
-    const color = r.x.assignedTo === 'p2' ? C.p2 : C.p1;
-    const soft = r.x.assignedTo === 'p2' ? C.p2s : C.p1s;
+    const color = r.pre ? '#A9781C' : r.x.assignedTo === 'p2' ? C.p2 : C.p1;
+    const soft = r.pre ? '#F8EACB' : r.x.assignedTo === 'p2' ? C.p2s : C.p1s;
     // Badge
     roundRect(ctx, ROW_X, y + 12, 68, 68, 20);
-    ctx.fillStyle = r.done ? soft : C.bg;
+    ctx.fillStyle = r.done || r.pre ? soft : C.bg;
     ctx.fill();
-    ctx.fillStyle = r.done ? color : C.soft;
+    ctx.fillStyle = r.done || r.pre ? color : C.soft;
     ctx.font = '600 40px Fraunces';
     ctx.textAlign = 'center';
     ctx.fillText(r.l, ROW_X + 34, y + 60);
@@ -145,7 +149,7 @@ export async function renderRecapPNG(data) {
       ctx.font = '400 22px "DM Sans"';
       ctx.fillStyle = C.soft;
       const who = data.players[r.x.assignedTo]?.name ?? '';
-      ctx.fillText(`${who}’s pick · ${fmtDate(r.x.completedAt)}`, TEXT_X, y + 42 + r.lines.length * 38 + 2);
+      ctx.fillText(`${who}’s pick · ${fmtDate(dateOf(r.x))}`, TEXT_X, y + 42 + r.lines.length * 38 + 2);
     }
     y += r.h;
     if (i < rows.length - 1) {

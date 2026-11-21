@@ -27,7 +27,8 @@ service cloud.firestore {
     // Kept deliberately tiny: rules have a 1000-expression budget per request,
     // and a reset touches all 26 letters at once.
     function okLetter(x) {
-      return x.description is string && x.description.size() <= 80;
+      return x.description is string && x.description.size() <= 80
+        && (!('location' in x) || (x.location is string && x.location.size() <= 80));
     }
 
     // Full check — only used on create (every letter is new).

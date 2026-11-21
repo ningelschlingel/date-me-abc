@@ -31,8 +31,9 @@ To play both sides locally, open the invite link in a private window (each brows
 
 ```
 src/
-  main.js      routing, screens, sheets, realtime handling
-  game.js      all Firestore reads/writes (create, join, claim, complete, reset)
+  main.js      routing, screens, sheets, realtime handling, plan prompts
+  game.js      all Firestore reads/writes (create, join, claim, pick, complete, plan, reset)
+  calendar.js  .ics file + Google Calendar link for planned dates
   anim.js      draw/reveal animation, confetti, sparkles, toasts
   export.js    copy-as-text and the PNG recap (drawn on a canvas)
   ideas.js     three date ideas per letter
@@ -48,23 +49,32 @@ One document per couple at `series/{id}` (`id` is a 6-char code like `NFS4KQ`):
 {
   status: 'WAITING' | 'ACTIVE' | 'COMPLETED',
   createdAt, updatedAt, completedAt,
-  round: 3,          // global draw counter, increases with every draw (also across resets)
-  cycle: 1,          // how many alphabets this couple has started
+  round: 3,             // global round counter, increases every round (also across resets)
+  cycle: 1,             // how many alphabets this couple has started
+  cycleStartRound: 1,   // round number where the current alphabet began
+  settings: { draw: 'random' | 'manual' },
   players: {
-    p1: { name, uids: [deviceUid, ...], seenRound, seenAt },
+    p1: { name, uids: [deviceUid, ...], seenRound, seenAt, seenPlanAt },
     p2: { ... } | null
   },
   letters: {
-    A: { status: 'DONE', assignedTo: 'p1', description, round, drawnAt, completedAt },
-    B: { status: 'ACTIVE', assignedTo: 'p2', description: '', round, drawnAt },
-    C: { status: 'UNUSED', assignedTo: null, description: '' },
+    A: { status: 'DONE', assignedTo: 'p1', description, round, drawnAt, completedAt, dateAt, location? },
+    B: { status: 'ACTIVE', assignedTo: 'p2', description: '', round, drawnAt,
+         plannedAt?, location?, plannedBy?, planUpdatedAt? },
+    C: { status: 'PREDONE', assignedTo: null, description: '' },   // ticked off before starting
+    D: { status: 'UNUSED', assignedTo: null, description: '' },
+    F: { status: 'DONE', retro: true, filledBy: 'p2', assignedTo: 'p1', dateAt, ... }, // a filled-in PREDONE
     ...
   }
 }
 ```
 
-- **"Seen" tracking.** `seenRound` drives the letter-draw reveal: if `round > seenRound`, that player hasn't seen the newest letters yet, so the flip-and-roll animation plays the next time they open the app. `seenAt` drives the "Sam logged their B date…" toasts for partner activity since your last visit.
-- **No double draws.** Completing a letter and drawing the next round happen inside one `runTransaction`. If both players submit at the same moment, Firestore retries one of the transactions, which then sees the round has already been drawn.
+- **Draw modes.** In `random` mode, two letters are drawn when a round opens. In `manual` mode, each player picks one unused letter. Picking is a transaction too, so if both of you grab the same letter at once, exactly one gets it.
+- **Rounds.** A round ends when nothing is `ACTIVE` and each player has logged a letter in it, or when there are no unused letters left. That also covers the last round when only one letter remains.
+- **Pre-marked letters (`PREDONE`).** These count as done and are never drawn. Either player can fill one in later (what you did, when, who planned it); it then becomes `DONE` with `retro: true`.
+- **Plans.** The owner of an active letter can set `plannedAt` and `location`. The partner gets a one-time "add to calendar" pop-up (tracked with `seenPlanAt`). An hour after the planned time, the owner is asked "Did it happen?". When the date is logged, a past `plannedAt` becomes its `dateAt`.
+- **"Seen" tracking.** `seenRound` drives the letter-draw reveal: if `round > seenRound`, that player hasn't seen the newest letters yet, so the flip-and-roll animation plays the next time they open the app. `seenAt` drives the toasts for partner activity since your last visit ("Sam logged their B date…", "Sam picked K", "Sam filled in F").
+- **No double draws.** Completing a letter and opening the next round happen inside one `runTransaction`. If both players submit at the same moment, Firestore retries one of the transactions, which then sees the round has already moved on.
 
 ### Multiple devices
 
@@ -81,4 +91,4 @@ Keys live in `series/{id}/private/keys` (members only). A new device proves it k
 - Anyone signed in can read a series only while it's `WAITING`; after that, only member devices can read it.
 - Only member devices can update the series. They can't edit the device lists in a normal update.
 - Joining is allowed once, only while `WAITING`, and not by the creator's own device.
-- Descriptions must be at most 80 characters and names 1–24 characters. Only the letters that changed are validated, to stay within Firestore's 1000-expression budget per request.
+- Descriptions and locations must be at most 80 characters, and names 1–24 characters. Only the letters that changed are validated, to stay within Firestore's 1000-expression budget per request.
